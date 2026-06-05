@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-gateway
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: app-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-gateway
+  template:
+    metadata:
+      labels:
+        app: app-gateway
+    spec:
+      containers:
+      - name: app-gateway
+        image: {{ docker_registry }}/app-gateway:{{ image_tag }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: RAG_ENGINE_URL
+          value: "http://rag-engine:8000"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: VAULT_ENABLED
+          value: "true"
+        - name: VAULT_ADDR
+          value: "http://vault:8200"
+        - name: VAULT_TOKEN
+          value: "{{ vault_root_token }}"
+        - name: VAULT_SECRET_PATH
+          value: "{{ vault_secret_path }}"
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-gateway
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: app-gateway
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  selector:
+    app: app-gateway

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-engine
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: rag-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-engine
+  template:
+    metadata:
+      labels:
+        app: rag-engine
+    spec:
+      containers:
+      - name: rag-engine
+        image: {{ docker_registry }}/rag-engine:{{ image_tag }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: QDRANT_URL
+          value: "http://qdrant:6333"
+        - name: ELASTICSEARCH_URL
+          value: "http://elasticsearch:9200"
+        - name: OLLAMA_URL
+          value: "http://ollama:11434"
+        - name: OLLAMA_MODEL
+          value: "{{ ollama_model }}"
+        - name: VAULT_ENABLED
+          value: "true"
+        - name: VAULT_ADDR
+          value: "http://vault:8200"
+        - name: VAULT_TOKEN
+          value: "{{ vault_root_token }}"
+        - name: VAULT_SECRET_PATH
+          value: "{{ vault_secret_path }}"
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "3Gi"
+            cpu: "2000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-engine
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: rag-engine
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  selector:
+    app: rag-engine

@@ -1,0 +1,11 @@
+pipeline {
+    agent any
+    
+    stages {
+        stage('Orchestrate Teardown via Ansible') {
+            steps {
+                sh "ansible-playbook -i ansible/inventory.ini ansible/playbooks/teardown.yml"
+            }
+        }
+    }
+}

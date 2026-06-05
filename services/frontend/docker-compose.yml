@@ -1,0 +1,14 @@
+version: '3.6'
+
+services:
+  chatgpt:
+    build: .
+    image: chatbot-app:latest
+    ports:
+      - "8080:3000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"

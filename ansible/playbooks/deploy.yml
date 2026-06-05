@@ -1,0 +1,114 @@
+---
+- name: Deploy Enterprise LLMOps Platform to Minikube
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    k8s_namespace: "llmops-platform"
+    docker_registry: "poojan"
+    image_tag: "latest"
+    redis_password: "SuperSecureRedisPassword123"
+    vault_root_token: "root-token"
+    vault_secret_path: "llmops-platform"
+    ollama_model: "gemma2:2b"
+    build_dir: "{{ playbook_dir }}/build"
+
+  tasks:
+    - name: Create local build directory for rendered manifests
+      file:
+        path: "{{ build_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Render Kubernetes manifest templates
+      template:
+        src: "{{ playbook_dir }}/../templates/{{ item }}.yaml.j2"
+        dest: "{{ build_dir }}/{{ item }}.yaml"
+        mode: '0644'
+      loop:
+        - namespace
+        - vault
+        - redis
+        - qdrant
+        - elasticsearch
+        - ollama
+        - rag-engine
+        - app-gateway
+        - frontend
+
+    - name: Create namespace in Minikube
+      shell: "kubectl apply -f {{ build_dir }}/namespace.yaml"
+      register: ns_out
+      changed_when: "'created' in ns_out.stdout or 'configured' in ns_out.stdout"
+
+    - name: Deploy infrastructure services (Vault, Redis, Qdrant, Elasticsearch, Ollama)
+      shell: "kubectl apply -f {{ build_dir }}/{{ item }}.yaml"
+      register: infra_out
+      changed_when: "'created' in infra_out.stdout or 'configured' in infra_out.stdout"
+      loop:
+        - vault
+        - redis
+        - qdrant
+        - elasticsearch
+        - ollama
+
+    - name: Wait for Vault deployment to be ready
+      shell: "kubectl rollout status deployment/vault -n {{ k8s_namespace }} --timeout=120s"
+      register: vault_status
+      changed_when: false
+
+    - name: Wait for Vault container sys health to be OK
+      shell: "kubectl exec -n {{ k8s_namespace }} deployment/vault -- vault status -format=json"
+      register: vault_health
+      until: vault_health.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Provision database secrets into Vault
+      shell: >
+        kubectl exec -n {{ k8s_namespace }} deployment/vault -- 
+        env VAULT_TOKEN="{{ vault_root_token }}" VAULT_ADDR="http://127.0.0.1:8200" 
+        vault kv put secret/{{ vault_secret_path }} 
+        RAG_ENGINE_URL="http://rag-engine:8000" 
+        REDIS_HOST="redis" 
+        REDIS_PORT="6379" 
+        REDIS_PASSWORD="{{ redis_password }}"
+      register: vault_secret_out
+      changed_when: "'created_time' in vault_secret_out.stdout"
+
+    - name: Deploy application microservices (RAG Engine, App Gateway, Frontend)
+      shell: "kubectl apply -f {{ build_dir }}/{{ item }}.yaml"
+      register: app_out
+      changed_when: "'created' in app_out.stdout or 'configured' in app_out.stdout"
+      loop:
+        - rag-engine
+        - app-gateway
+        - frontend
+
+    - name: Wait for all application rollouts to complete
+      shell: "kubectl rollout status deployment/{{ item }} -n {{ k8s_namespace }} --timeout=180s"
+      register: app_status
+      changed_when: false
+      loop:
+        - rag-engine
+        - app-gateway
+        - frontend
+
+    - name: Check Minikube IP
+      shell: "minikube ip"
+      register: minikube_ip
+      ignore_errors: true
+      changed_when: false
+
+    - name: Display connection information
+      debug:
+        msg:
+          - "==============================================================="
+          - "Enterprise LLMOps Platform deployed successfully!"
+          - "Frontend Chatbot UI accessible at: http://{{ minikube_ip.stdout | default('minikube-ip') }}:30080"
+          - "HashiCorp Vault UI accessible at: http://{{ minikube_ip.stdout | default('minikube-ip') }}:32200 (port-forward needed)"
+          - "RAG Engine endpoint: http://rag-engine.{{ k8s_namespace }}.svc.cluster.local:8000"
+          - "App Gateway endpoint: http://app-gateway.{{ k8s_namespace }}.svc.cluster.local:8080"
+          - "==============================================================="

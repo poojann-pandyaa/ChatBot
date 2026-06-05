@@ -1,0 +1,108 @@
+pipeline {
+    agent any
+    
+    tools {
+        nodejs 'node19'
+    }
+    
+    environment {
+        DOCKER_REGISTRY = 'poojan'
+        IMAGE_TAG = 'latest'
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+    
+    stages {
+        stage('Git Checkout') {
+            steps {
+                // Checkout current repo
+                checkout scm
+            }
+        }
+        
+        stage('SonarQube Static Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh '''
+                    $SCANNER_HOME/bin/sonar-scanner \
+                      -Dsonar.projectName=LLMOps-Platform \
+                      -Dsonar.projectKey=LLMOps-Platform \
+                      -Dsonar.sources=services/
+                    '''
+                }
+            }
+        }
+        
+        stage('Trivy Filesystem Scan') {
+            steps {
+                sh "trivy fs services/ > trivy-fs-report.json"
+            }
+        }
+        
+        stage('Build Container Images') {
+            parallel {
+                stage('Build RAG Engine') {
+                    steps {
+                        sh "docker build -t ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} services/rag-engine/"
+                    }
+                }
+                stage('Build App Gateway') {
+                    steps {
+                        sh "docker build -t ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} services/app-gateway/"
+                    }
+                }
+                stage('Build Frontend Chatbot UI') {
+                    steps {
+                        sh "docker build -t ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} services/frontend/"
+                    }
+                }
+            }
+        }
+        
+        stage('Trivy Container Scan') {
+            parallel {
+                stage('Scan RAG Engine') {
+                    steps {
+                        sh "trivy image ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} > trivy-rag-report.json"
+                    }
+                }
+                stage('Scan App Gateway') {
+                    steps {
+                        sh "trivy image ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} > trivy-gateway-report.json"
+                    }
+                }
+                stage('Scan Frontend') {
+                    steps {
+                        sh "trivy image ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} > trivy-frontend-report.json"
+                    }
+                }
+            }
+        }
+        
+        stage('Push to Registry') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh "docker push ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG}"
+                        sh "docker push ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG}"
+                        sh "docker push ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+        
+        stage('Orchestrate Deploy via Ansible') {
+            steps {
+                sh """
+                ansible-playbook -i ansible/inventory.ini ansible/playbooks/deploy.yml \
+                  --extra-vars "docker_registry=${DOCKER_REGISTRY} image_tag=${IMAGE_TAG}"
+                """
+            }
+        }
+    }
+    
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
