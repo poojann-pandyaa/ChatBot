@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+import argparse
 import numpy as np
 from tqdm import tqdm
 from qdrant_client import QdrantClient
@@ -38,6 +39,7 @@ def embed_batch_torch(model, tokenizer, texts, device):
 def run_ingestion(
     data_path="data/processed_dataset.jsonl",
     qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
+    limit=None,
 ):
     print(f"Connecting to Qdrant at {qdrant_url}...")
     client = QdrantClient(url=qdrant_url)
@@ -55,9 +57,8 @@ def run_ingestion(
     chunks = []
     metadata = []
 
-    print(f"Reading & chunking dataset from {data_path}...")
+    print(f"Reading & chunking dataset from {data_path} (limit={limit})...")
     if not os.path.exists(data_path):
-        # Fallback to local subdirectory if run from different folder
         alt_path = os.path.join(os.path.dirname(__file__), "../../", data_path)
         if os.path.exists(alt_path):
             data_path = alt_path
@@ -66,6 +67,9 @@ def run_ingestion(
 
     with open(data_path, "r", encoding="utf-8") as f:
         for line in tqdm(f, desc="Chunking"):
+            if limit and len(chunks) >= limit:
+                break
+                
             record = json.loads(line)
             title = record.get("title", "")[:200]
             domain = record.get("domain", "")
@@ -86,6 +90,9 @@ def run_ingestion(
             )[:MAX_ANSWERS]
 
             for ans in good:
+                if limit and len(chunks) >= limit:
+                    break
+                    
                 body = ans.get("body_clean", "")[:MAX_CHUNK_LEN]
                 chunk_text = f"Q: {title}\nA: {body}"[:MAX_CHUNK_LEN]
                 chunks.append(chunk_text)
@@ -99,7 +106,7 @@ def run_ingestion(
                 })
 
     total = len(chunks)
-    print(f"Total chunks: {total}")
+    print(f"Total chunks chunked: {total}")
     if total == 0:
         print("No chunks. Exiting.")
         return
@@ -139,4 +146,10 @@ def run_ingestion(
 
 
 if __name__ == "__main__":
-    run_ingestion()
+    parser = argparse.ArgumentParser(description="Ingest StackExchange data to Qdrant")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of chunks to ingest")
+    parser.add_argument("--data", default="data/processed_dataset.jsonl", help="Dataset path")
+    parser.add_argument("--url", default="http://localhost:6333", help="Qdrant url")
+    args = parser.parse_args()
+    
+    run_ingestion(data_path=args.data, qdrant_url=args.url, limit=args.limit)

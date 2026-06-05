@@ -1,5 +1,6 @@
 import os
 import json
+import argparse
 from tqdm import tqdm
 from elasticsearch import Elasticsearch, helpers
 
@@ -12,6 +13,7 @@ INDEX_NAME = "stackexchange_chunks"
 def run_ingestion(
     data_path="data/processed_dataset.jsonl",
     es_url=os.getenv("ELASTICSEARCH_URL", "http://localhost:9200"),
+    limit=None,
 ):
     print(f"Connecting to Elasticsearch at {es_url}...")
     es = Elasticsearch(es_url)
@@ -24,7 +26,7 @@ def run_ingestion(
     chunks = []
     metadata = []
 
-    print(f"Reading & chunking dataset from {data_path}...")
+    print(f"Reading & chunking dataset from {data_path} (limit={limit})...")
     if not os.path.exists(data_path):
         alt_path = os.path.join(os.path.dirname(__file__), "../../", data_path)
         if os.path.exists(alt_path):
@@ -34,6 +36,9 @@ def run_ingestion(
 
     with open(data_path, "r", encoding="utf-8") as f:
         for line in tqdm(f, desc="Chunking"):
+            if limit and len(chunks) >= limit:
+                break
+                
             record = json.loads(line)
             title = record.get("title", "")[:200]
             domain = record.get("domain", "")
@@ -54,6 +59,9 @@ def run_ingestion(
             )[:MAX_ANSWERS]
 
             for ans in good:
+                if limit and len(chunks) >= limit:
+                    break
+                    
                 body = ans.get("body_clean", "")[:MAX_CHUNK_LEN]
                 chunk_text = f"Q: {title}\nA: {body}"[:MAX_CHUNK_LEN]
                 chunks.append(chunk_text)
@@ -67,7 +75,7 @@ def run_ingestion(
                 })
 
     total = len(chunks)
-    print(f"Total chunks: {total}")
+    print(f"Total chunks chunked: {total}")
     if total == 0:
         print("No chunks. Exiting.")
         return
@@ -117,4 +125,10 @@ def run_ingestion(
 
 
 if __name__ == "__main__":
-    run_ingestion()
+    parser = argparse.ArgumentParser(description="Ingest StackExchange data to Elasticsearch")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of chunks to ingest")
+    parser.add_argument("--data", default="data/processed_dataset.jsonl", help="Dataset path")
+    parser.add_argument("--url", default="http://localhost:9200", help="Elasticsearch url")
+    args = parser.parse_args()
+    
+    run_ingestion(data_path=args.data, es_url=args.url, limit=args.limit)
