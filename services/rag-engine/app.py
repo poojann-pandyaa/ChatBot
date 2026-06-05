@@ -98,7 +98,7 @@ async def reasoning_chat(request: ChatRequest):
                 SourceMetadata(
                     chunk_id=c["chunk_id"],
                     score=c.get("final_score", c.get("score", 0.0)),
-                    question_id=meta.get("question_id", ""),
+                    question_id=str(meta.get("question_id", "")),
                     is_accepted=meta.get("is_accepted", False),
                     domain=meta.get("domain", ""),
                     chunk_text=meta.get("chunk_text", "")
