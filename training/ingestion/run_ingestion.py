@@ -47,7 +47,11 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
         if os.path.exists(alt_path):
             data_path = alt_path
         else:
-            raise FileNotFoundError(f"Dataset not found at {data_path} or {alt_path}")
+            host_path = "/Users/poojan/Documents/ChatBot_MLOps/data/processed_dataset.jsonl"
+            if os.path.exists(host_path):
+                data_path = host_path
+            else:
+                raise FileNotFoundError(f"Dataset not found at {data_path} or {alt_path} or {host_path}")
 
     chunks = []
     metadata = []
