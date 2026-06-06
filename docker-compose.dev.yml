@@ -80,6 +80,7 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_MODEL=gemma2:2b
+      - OLLAMA_NUM_PARALLEL=4
       - VAULT_ENABLED=true
       - VAULT_ADDR=http://vault:8200
       - VAULT_TOKEN=root-token

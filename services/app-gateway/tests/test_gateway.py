@@ -44,21 +44,26 @@ async def test_chat_endpoint():
 
     # Setup mock clients
     with patch("app.redis_client") as mock_redis, \
-         patch("httpx.AsyncClient.post") as mock_post:
+         patch("app.httpx.AsyncClient") as mock_client_class:
         
         mock_redis.rpush = AsyncMock()
+        mock_redis.lrange = AsyncMock(return_value=[])
+        
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
         
         # Mock RAG Engine response
         mock_http_response = MagicMock()
         mock_http_response.status_code = 200
         mock_http_response.json = MagicMock(return_value=mock_rag_response)
-        mock_post.return_value = mock_http_response
+        mock_client.post.return_value = mock_http_response
 
         # Request body
         payload = {
             "prompt": "Hello platform",
             "conversation_id": "session-123",
-            "debug": False
+            "debug": False,
+            "stream": False
         }
 
         # Use test client to call the gateway endpoint

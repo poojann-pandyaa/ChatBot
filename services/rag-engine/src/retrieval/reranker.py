@@ -1,12 +1,14 @@
-import json
-from sentence_transformers import CrossEncoder
+import os
+import httpx
+import asyncio
 
 class ContextReRanker:
-    def __init__(self, model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"):
-        print(f"Loading Cross-Encoder model: {model_name}...")
-        self.reranker = CrossEncoder(model_name)
+    def __init__(self, ml_service_url: str = None):
+        self.ml_service_url = ml_service_url or os.getenv("ML_SERVICE_URL", "http://localhost:8000")
+        self.client = httpx.AsyncClient(base_url=self.ml_service_url, timeout=30.0)
+        print(f"ContextReRanker initialized. ML Service URL: {self.ml_service_url}")
         
-    def rerank(self, query, candidates, top_k=5):
+    async def rerank(self, query, candidates, top_k=5):
         """
         candidates: List containing dicts with structure:
             {'chunk_id': int, 'score': float, 'metadata': dict}
@@ -14,11 +16,18 @@ class ContextReRanker:
         if not candidates:
             return []
             
-        # Prepare pairs for cross-encoder
-        pairs = [(query, cand['metadata']['chunk_text']) for cand in candidates]
+        # Prepare document texts for the cross-encoder endpoint
+        documents = [cand['metadata']['chunk_text'] for cand in candidates]
         
-        # Predict semantic relevance scores
-        scores = self.reranker.predict(pairs)
+        try:
+            response = await self.client.post("/rerank", json={"query": query, "documents": documents})
+            if response.status_code == 200:
+                scores = response.json()["scores"]
+            else:
+                raise Exception(f"ML Service /rerank returned {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"Reranking failed, using base scores: {e}")
+            scores = [cand.get('score', 0.0) for cand in candidates]
         
         scored_candidates = []
         for i, cand in enumerate(candidates):
@@ -41,6 +50,9 @@ class ContextReRanker:
         # Sort desc by final_score
         ranked = sorted(scored_candidates, key=lambda x: x['final_score'], reverse=True)
         return ranked[:top_k]
+
+    async def close(self):
+        await self.client.aclose()
 
 if __name__ == "__main__":
     # Test stub

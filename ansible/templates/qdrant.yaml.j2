@@ -26,11 +26,14 @@ spec:
           name: grpc
         resources:
           requests:
-            memory: "512Mi"
+            memory: "256Mi"
             cpu: "200m"
           limits:
-            memory: "2Gi"
+            memory: "1Gi"
             cpu: "1000m"
+        volumeMounts:
+        - name: qdrant-storage
+          mountPath: /qdrant/storage
         readinessProbe:
           httpGet:
             path: /healthz
@@ -43,6 +46,23 @@ spec:
             port: 6333
           initialDelaySeconds: 10
           periodSeconds: 10
+      volumes:
+      - name: qdrant-storage
+        persistentVolumeClaim:
+          claimName: qdrant-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-pvc
+  namespace: {{ k8s_namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
 ---
 apiVersion: v1
 kind: Service
@@ -62,3 +82,4 @@ spec:
     name: grpc
   selector:
     app: qdrant
+

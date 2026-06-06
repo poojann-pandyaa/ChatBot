@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+RUN pip install --no-cache-dir accelerate>=0.27.2
 
-# Copy pre-downloaded Hugging Face cache to speed up container builds and run offline
+# Copy HuggingFace Cache (will copy from build script context)
 COPY hf_cache/ /root/.cache/huggingface/hub/
 
 COPY . .

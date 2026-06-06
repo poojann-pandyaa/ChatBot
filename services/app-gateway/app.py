@@ -10,7 +10,7 @@ from config import config
 
 # Prometheus client imports
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 app = FastAPI(title="App Gateway API", version="1.0.0")
 
@@ -33,6 +33,7 @@ class UserChatRequest(BaseModel):
     prompt: str
     conversation_id: str
     debug: bool = False
+    stream: bool = True
 
 
 @app.on_event("startup")
@@ -56,19 +57,94 @@ async def startup_event():
 async def chat(request: UserChatRequest):
     start_time = time.time()
     try:
-        # 1. Log to Redis history if Redis is available
+        # 1. Fetch history from Redis BEFORE pushing the new prompt
+        history_msgs = []
+        if redis_client:
+            try:
+                raw_history = await redis_client.lrange(f"chat:{request.conversation_id}", 0, -1)
+                for msg in raw_history[-10:]: # Keep last 10 messages for context window
+                    role, _, content = msg.partition(":")
+                    history_msgs.append({"role": role, "content": content})
+            except Exception as e:
+                print(f"Error fetching history: {e}")
+
+        # 2. Log to Redis history
         if redis_client:
             await redis_client.rpush(f"chat:{request.conversation_id}", f"user:{request.prompt}")
             
-        # 2. Query stateless RAG engine
+        # 3. Query RAG engine (Standard vs Streaming)
+        if request.stream:
+            async def stream_generator():
+                full_answer_list = []
+                try:
+                    async with httpx.AsyncClient(timeout=None) as client:
+                        async with client.stream(
+                            "POST",
+                            f"{config.RAG_ENGINE_URL}/v1/reasoning-chat",
+                            json={
+                                "prompt": request.prompt,
+                                "history": history_msgs,
+                                "include_trace": request.debug,
+                                "stream": True
+                            }
+                        ) as stream_res:
+                            if stream_res.status_code != 200:
+                                error_text = await stream_res.aread()
+                                yield f"Error from RAG Engine: {error_text.decode()}".encode()
+                                return
+
+                            import json
+                            buffer = ""
+                            async for chunk in stream_res.aiter_bytes():
+                                yield chunk
+                                chunk_str = chunk.decode(errors="ignore")
+                                buffer += chunk_str
+                                while "\n" in buffer:
+                                    line, buffer = buffer.split("\n", 1)
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    try:
+                                        parsed = json.loads(line)
+                                        if parsed.get("type") == "token":
+                                            full_answer_list.append(parsed.get("data", ""))
+                                    except Exception as parse_err:
+                                        print(f"Failed to parse stream line in gateway: {parse_err}")
+
+                            # Handle remaining buffer if any
+                            if buffer.strip():
+                                try:
+                                    parsed = json.loads(buffer.strip())
+                                    if parsed.get("type") == "token":
+                                        full_answer_list.append(parsed.get("data", ""))
+                                except Exception as parse_err:
+                                    print(f"Failed to parse leftover stream line in gateway: {parse_err}")
+
+                    # Write full answer to Redis history on completion
+                    full_answer = "".join(full_answer_list)
+                    if redis_client:
+                        await redis_client.rpush(f"chat:{request.conversation_id}", f"assistant:{full_answer}")
+                    
+                    LATENCY_HISTOGRAM.observe(time.time() - start_time)
+                    REQUEST_COUNTER.labels(status="success").inc()
+
+                except Exception as stream_err:
+                    REQUEST_COUNTER.labels(status="error").inc()
+                    print(f"Streaming error in App Gateway: {stream_err}")
+                    yield f"\n[Gateway Stream Error: {stream_err}]".encode()
+
+            return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
+
         async with httpx.AsyncClient() as client:
             rag_response = await client.post(
                 f"{config.RAG_ENGINE_URL}/v1/reasoning-chat",
                 json={
                     "prompt": request.prompt,
-                    "include_trace": request.debug
+                    "history": history_msgs,
+                    "include_trace": request.debug,
+                    "stream": False
                 },
-                timeout=120.0,
+                timeout=300.0,
             )
             
         if rag_response.status_code != 200:

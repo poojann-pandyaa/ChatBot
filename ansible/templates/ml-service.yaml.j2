@@ -1,49 +1,25 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rag-engine
+  name: ml-service
   namespace: {{ k8s_namespace }}
   labels:
-    app: rag-engine
+    app: ml-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: rag-engine
+      app: ml-service
   template:
     metadata:
       labels:
-        app: rag-engine
+        app: ml-service
     spec:
       containers:
-      - name: rag-engine
-        image: {{ docker_registry }}/rag-engine:{{ image_tag }}
+      - name: ml-service
+        image: {{ docker_registry }}/ml-service:{{ image_tag }}
         imagePullPolicy: IfNotPresent
         env:
-        - name: ML_SERVICE_URL
-          value: "http://ml-service:8000"
-        - name: REDIS_HOST
-          value: "redis"
-        - name: REDIS_PORT
-          value: "6379"
-        - name: REDIS_PASSWORD
-          value: "{{ redis_password }}"
-        - name: QDRANT_URL
-          value: "http://qdrant:6333"
-        - name: ELASTICSEARCH_URL
-          value: "http://elasticsearch:9200"
-        - name: OLLAMA_URL
-          value: "http://ollama:11434"
-        - name: OLLAMA_MODEL
-          value: "{{ ollama_model }}"
-        - name: VAULT_ENABLED
-          value: "true"
-        - name: VAULT_ADDR
-          value: "http://vault:8200"
-        - name: VAULT_TOKEN
-          value: "{{ vault_root_token }}"
-        - name: VAULT_SECRET_PATH
-          value: "{{ vault_secret_path }}"
         - name: HF_HUB_OFFLINE
           value: "1"
         - name: HF_DATASETS_OFFLINE
@@ -59,16 +35,16 @@ spec:
           name: http
         resources:
           requests:
-            memory: "768Mi"
+            memory: "1Gi"
             cpu: "200m"
           limits:
-            memory: "6Gi"
+            memory: "4Gi"
             cpu: "2000m"
         startupProbe:
           httpGet:
             path: /health
             port: 8000
-          initialDelaySeconds: 10
+          initialDelaySeconds: 15
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 30
@@ -92,10 +68,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: rag-engine
+  name: ml-service
   namespace: {{ k8s_namespace }}
   labels:
-    app: rag-engine
+    app: ml-service
 spec:
   type: ClusterIP
   ports:
@@ -103,4 +79,4 @@ spec:
     targetPort: 8000
     name: http
   selector:
-    app: rag-engine
+    app: ml-service

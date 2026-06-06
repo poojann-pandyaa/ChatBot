@@ -33,15 +33,17 @@ class ReasoningEngine:
                 deduped.append(cand)
         return deduped
 
-    async def commonsense_path(self, trace):
+    async def commonsense_path(self, trace, run_generator=True):
         print("Executing Commonsense Path...")
         candidates = await self.retriever.hybrid_retrieve(trace.query, top_k=20)
-        reranked = self.reranker.rerank(trace.query, candidates, top_k=5)
+        reranked = await self.reranker.rerank(trace.query, candidates, top_k=5)
         trace.retrieved_per_subquery["main"] = [r['chunk_id'] for r in reranked]
         trace.reranked_final = reranked
-        return await self.generator.generate(trace)
+        if run_generator:
+            return await self.generator.generate(trace)
+        return trace
 
-    async def adaptive_path(self, trace):
+    async def adaptive_path(self, trace, run_generator=True):
         print("Executing Adaptive Path...")
         sub_questions = trace.classification.get("sub_questions", [])
         
@@ -49,16 +51,21 @@ class ReasoningEngine:
         tasks = [self.retriever.hybrid_retrieve(sq, top_k=10) for sq in sub_questions]
         results = await asyncio.gather(*tasks)
         
+        # Concurrently rerank for all sub-questions
+        rerank_tasks = [self.reranker.rerank(sq, cands, top_k=3) for sq, cands in zip(sub_questions, results)]
+        reranked_results = await asyncio.gather(*rerank_tasks)
+        
         all_candidates = []
-        for sq, cands in zip(sub_questions, results):
-            ranked = self.reranker.rerank(sq, cands, top_k=3)
+        for sq, ranked in zip(sub_questions, reranked_results):
             trace.retrieved_per_subquery[sq] = [r['chunk_id'] for r in ranked]
             all_candidates.extend(ranked)
             
         trace.reranked_final = self.deduplicate(all_candidates)
-        return await self.generator.generate(trace)
+        if run_generator:
+            return await self.generator.generate(trace)
+        return trace
 
-    async def strategic_path(self, trace):
+    async def strategic_path(self, trace, run_generator=True):
         print("Executing Strategic Path...")
         sub_questions = trace.classification.get("sub_questions", [])
         
@@ -73,28 +80,34 @@ class ReasoningEngine:
         all_candidates = list(level1_candidates)
         trace.retrieved_per_subquery["level1_main"] = [r['chunk_id'] for r in level1_candidates[:3]]
         
-        for sq, cands in zip(sub_questions, results[1:]):
-            ranked = self.reranker.rerank(sq, cands, top_k=3)
+        # Concurrently rerank for all sub-questions
+        rerank_tasks = [self.reranker.rerank(sq, cands, top_k=3) for sq, cands in zip(sub_questions, results[1:])]
+        reranked_results = await asyncio.gather(*rerank_tasks)
+        
+        for sq, ranked in zip(sub_questions, reranked_results):
             trace.retrieved_per_subquery[sq] = [r['chunk_id'] for r in ranked]
             all_candidates.extend(ranked)
             
         trace.reranked_final = self.deduplicate(all_candidates)
-        return await self.generator.generate(trace)
+        if run_generator:
+            return await self.generator.generate(trace)
+        return trace
 
-    async def execute(self, trace):
+    async def execute(self, trace, run_generator=True):
         r_type = trace.classification.get("reasoning_type", "commonsense")
         if trace.classification.get("ambiguity", "low") == "high":
             print("Note: High ambiguity detected.")
             
         if r_type == "commonsense":
-            return await self.commonsense_path(trace)
+            return await self.commonsense_path(trace, run_generator)
         elif r_type == "adaptive":
-            return await self.adaptive_path(trace)
+            return await self.adaptive_path(trace, run_generator)
         elif r_type == "strategic":
-            return await self.strategic_path(trace)
+            return await self.strategic_path(trace, run_generator)
         else:
-            return await self.commonsense_path(trace)
+            return await self.commonsense_path(trace, run_generator)
 
     async def close(self):
         await self.retriever.close()
+        await self.reranker.close()
         await self.generator.close()

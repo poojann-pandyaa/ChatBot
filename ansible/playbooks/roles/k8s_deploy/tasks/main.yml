@@ -1,0 +1,115 @@
+---
+- name: Create local build directory for rendered manifests
+  file:
+    path: "{{ build_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Render Kubernetes manifest templates
+  template:
+    src: "{{ playbook_dir }}/../templates/{{ item }}.yaml.j2"
+    dest: "{{ build_dir }}/{{ item }}.yaml"
+    mode: '0644'
+  loop:
+    - namespace
+    - vault
+    - redis
+    - qdrant
+    - elasticsearch
+    - ollama
+    - ml-service
+    - rag-engine
+    - app-gateway
+    - frontend
+
+- name: Create namespace in Minikube
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ build_dir }}/namespace.yaml"
+
+- name: Deploy infrastructure services (Vault, Redis, Qdrant, Elasticsearch, Ollama)
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ build_dir }}/{{ item }}.yaml"
+  loop:
+    - vault
+    - redis
+    - qdrant
+    - elasticsearch
+    - ollama
+
+- name: Wait for Vault deployment to be ready
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: vault
+    namespace: "{{ k8s_namespace }}"
+  register: vault_info
+  until: >
+    vault_info.resources is defined and
+    vault_info.resources | length > 0 and
+    vault_info.resources[0].status is defined and
+    vault_info.resources[0].status.readyReplicas is defined and
+    vault_info.resources[0].status.readyReplicas == 1
+  retries: 24
+  delay: 5
+
+- name: Get vault pod name
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ k8s_namespace }}"
+    label_selectors:
+      - app = vault
+  register: vault_pods
+
+- name: Wait for Vault container sys health to be OK
+  kubernetes.core.k8s_exec:
+    namespace: "{{ k8s_namespace }}"
+    pod: "{{ vault_pods.resources[0].metadata.name }}"
+    command: env VAULT_ADDR="http://127.0.0.1:8200" vault status -format=json
+  register: vault_health
+  until: vault_health.rc == 0
+  retries: 12
+  delay: 5
+
+- name: Provision database secrets into Vault
+  kubernetes.core.k8s_exec:
+    namespace: "{{ k8s_namespace }}"
+    pod: "{{ vault_pods.resources[0].metadata.name }}"
+    command: >
+      env VAULT_TOKEN="{{ vault_root_token }}" VAULT_ADDR="http://127.0.0.1:8200"
+      vault kv put secret/{{ vault_secret_path }}
+      RAG_ENGINE_URL="http://rag-engine:8000"
+      REDIS_HOST="redis"
+      REDIS_PORT="6379"
+      REDIS_PASSWORD="{{ redis_password }}"
+  register: vault_secret_out
+
+- name: Deploy application microservices (RAG Engine, App Gateway, Frontend)
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ build_dir }}/{{ item }}.yaml"
+  loop:
+    - ml-service
+    - rag-engine
+    - app-gateway
+    - frontend
+
+- name: Wait for all application rollouts to complete
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: "{{ item }}"
+    namespace: "{{ k8s_namespace }}"
+  register: app_info
+  until: >
+    app_info.resources is defined and
+    app_info.resources | length > 0 and
+    app_info.resources[0].status is defined and
+    app_info.resources[0].status.readyReplicas is defined and
+    app_info.resources[0].status.readyReplicas == app_info.resources[0].spec.replicas
+  retries: 36
+  delay: 5
+  loop:
+    - ml-service
+    - rag-engine
+    - app-gateway
+    - frontend

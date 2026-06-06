@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: ollama
-        image: ollama/ollama:0.1.48
+        image: ollama/ollama:0.5.13
         imagePullPolicy: IfNotPresent
         command:
         - "/bin/sh"
@@ -26,13 +26,30 @@ spec:
         ports:
         - containerPort: 11434
           name: api
+        env:
+        # Limit context window to 2048 tokens to dramatically reduce KV-cache RAM usage
+        - name: OLLAMA_NUM_CTX
+          value: "2048"
+        # Enable flash attention to cut KV-cache memory footprint ~40%
+        - name: OLLAMA_FLASH_ATTENTION
+          value: "1"
+        # Only serve one request at a time to avoid memory spikes
+        - name: OLLAMA_NUM_PARALLEL
+          value: "4"
+        # Only keep one model loaded in RAM at a time
+        - name: OLLAMA_MAX_LOADED_MODELS
+          value: "1"
         resources:
           requests:
-            memory: "2Gi"
-            cpu: "1000m"
+            memory: "1Gi"
+            cpu: "500m"
           limits:
             memory: "6Gi"
             cpu: "4000m"
+        volumeMounts:
+        # Persist downloaded models across pod restarts (avoids re-pulling 1.6Gi each time)
+        - name: ollama-models
+          mountPath: /root/.ollama
         readinessProbe:
           httpGet:
             path: /
@@ -45,6 +62,22 @@ spec:
             port: 11434
           initialDelaySeconds: 15
           periodSeconds: 10
+      volumes:
+      - name: ollama-models
+        persistentVolumeClaim:
+          claimName: ollama-models-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: {{ k8s_namespace }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service

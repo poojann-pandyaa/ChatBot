@@ -17,18 +17,18 @@ spec:
     spec:
       containers:
       - name: redis
-        image: redis:7-alpine
+        image: redis/redis-stack-server:latest
         imagePullPolicy: IfNotPresent
-        command: ["redis-server", "--requirepass", "{{ redis_password }}"]
+        command: ["redis-server", "--requirepass", "{{ redis_password }}", "--loadmodule", "/opt/redis-stack/lib/redisearch.so"]
         ports:
         - containerPort: 6379
           name: redis
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "256Mi"
+            memory: "512Mi"
             cpu: "200m"
         readinessProbe:
           tcpSocket:

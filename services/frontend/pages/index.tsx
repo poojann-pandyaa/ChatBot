@@ -13,7 +13,6 @@ import {
   OpenAIModels,
   fallbackModelID,
 } from '@/types/openai';
-import { Plugin, PluginKey } from '@/types/plugin';
 import { Prompt } from '@/types/prompt';
 import { getEndpoint } from '@/utils/app/api';
 import {
@@ -44,24 +43,18 @@ interface HomeProps {
   defaultModelId: OpenAIModelID;
 }
 
-const Home: React.FC<HomeProps> = ({
+export default function Home({
   serverSideApiKeyIsSet,
   serverSidePluginKeysSet,
   defaultModelId,
-}) => {
+}: HomeProps) {
   const { t } = useTranslation('chat');
 
   // STATE ----------------------------------------------
 
-  const [apiKey, setApiKey] = useState<string>('');
-  const [pluginKeys, setPluginKeys] = useState<PluginKey[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [lightMode, setLightMode] = useState<'dark' | 'light'>('dark');
   const [messageIsStreaming, setMessageIsStreaming] = useState<boolean>(false);
-
-  const [modelError, setModelError] = useState<ErrorMessage | null>(null);
-
-  const [models, setModels] = useState<OpenAIModel[]>([]);
 
   const [folders, setFolders] = useState<Folder[]>([]);
 
@@ -113,27 +106,12 @@ const Home: React.FC<HomeProps> = ({
       const chatBody: ChatBody = {
         model: updatedConversation.model,
         messages: updatedConversation.messages,
-        key: apiKey,
         prompt: updatedConversation.prompt,
         conversationId: updatedConversation.id,
       };
 
-      const endpoint = getEndpoint(plugin);
-      let body;
-
-      if (!plugin) {
-        body = JSON.stringify(chatBody);
-      } else {
-        body = JSON.stringify({
-          ...chatBody,
-          googleAPIKey: pluginKeys
-            .find((key) => key.pluginId === 'google-search')
-            ?.requiredKeys.find((key) => key.key === 'GOOGLE_API_KEY')?.value,
-          googleCSEId: pluginKeys
-            .find((key) => key.pluginId === 'google-search')
-            ?.requiredKeys.find((key) => key.key === 'GOOGLE_CSE_ID')?.value,
-        });
-      }
+      const endpoint = getEndpoint(null);
+      let body = JSON.stringify(chatBody);
 
       const controller = new AbortController();
       const response = await fetch(endpoint, {
@@ -160,9 +138,8 @@ const Home: React.FC<HomeProps> = ({
         return;
       }
 
-      if (!plugin) {
-        if (updatedConversation.messages.length === 1) {
-          const { content } = message;
+      if (updatedConversation.messages.length === 1) {
+        const { content } = message;
           const customName =
             content.length > 30 ? content.substring(0, 30) + '...' : content;
 
@@ -177,8 +154,10 @@ const Home: React.FC<HomeProps> = ({
         const reader = data.getReader();
         const decoder = new TextDecoder();
         let done = false;
+        let streamBuffer = '';
+        let assistantContent = '';
+        let assistantTrace: any = undefined;
         let isFirst = true;
-        let text = '';
 
         while (!done) {
           if (stopConversationRef.current === true) {
@@ -188,15 +167,33 @@ const Home: React.FC<HomeProps> = ({
           }
           const { value, done: doneReading } = await reader.read();
           done = doneReading;
-          const chunkValue = decoder.decode(value);
+          const chunkValue = decoder.decode(value || new Uint8Array(), { stream: !doneReading });
 
-          text += chunkValue;
+          streamBuffer += chunkValue;
+          const lines = streamBuffer.split('\n');
+          streamBuffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.type === 'trace') {
+                assistantTrace = parsed.data;
+              } else if (parsed.type === 'token') {
+                assistantContent += parsed.data;
+              } else if (parsed.type === 'error') {
+                assistantContent += `\n[Error: ${parsed.data}]`;
+              }
+            } catch (err) {
+              console.error('Failed to parse line from stream:', line, err);
+            }
+          }
 
           if (isFirst) {
             isFirst = false;
             const updatedMessages: Message[] = [
               ...updatedConversation.messages,
-              { role: 'assistant', content: chunkValue },
+              { role: 'assistant', content: assistantContent, trace: assistantTrace },
             ];
 
             updatedConversation = {
@@ -211,7 +208,8 @@ const Home: React.FC<HomeProps> = ({
                 if (index === updatedConversation.messages.length - 1) {
                   return {
                     ...message,
-                    content: text,
+                    content: assistantContent,
+                    trace: assistantTrace || message.trace,
                   };
                 }
 
@@ -228,6 +226,42 @@ const Home: React.FC<HomeProps> = ({
           }
         }
 
+        if (streamBuffer.trim()) {
+          try {
+            const parsed = JSON.parse(streamBuffer.trim());
+            if (parsed.type === 'trace') {
+              assistantTrace = parsed.data;
+            } else if (parsed.type === 'token') {
+              assistantContent += parsed.data;
+            } else if (parsed.type === 'error') {
+              assistantContent += `\n[Error: ${parsed.data}]`;
+            }
+            
+            const updatedMessages: Message[] = updatedConversation.messages.map(
+              (message, index) => {
+                if (index === updatedConversation.messages.length - 1) {
+                  return {
+                    ...message,
+                    content: assistantContent,
+                    trace: assistantTrace || message.trace,
+                  };
+                }
+
+                return message;
+              },
+            );
+
+            updatedConversation = {
+              ...updatedConversation,
+              messages: updatedMessages,
+            };
+
+            setSelectedConversation(updatedConversation);
+          } catch (err) {
+            console.error('Failed to parse leftover line from stream:', streamBuffer, err);
+          }
+        }
+
         saveConversation(updatedConversation);
 
         const updatedConversations: Conversation[] = conversations.map(
@@ -248,141 +282,12 @@ const Home: React.FC<HomeProps> = ({
         saveConversations(updatedConversations);
 
         setMessageIsStreaming(false);
-      } else {
-        const { answer } = await response.json();
-
-        const updatedMessages: Message[] = [
-          ...updatedConversation.messages,
-          { role: 'assistant', content: answer },
-        ];
-
-        updatedConversation = {
-          ...updatedConversation,
-          messages: updatedMessages,
-        };
-
-        setSelectedConversation(updatedConversation);
-        saveConversation(updatedConversation);
-
-        const updatedConversations: Conversation[] = conversations.map(
-          (conversation) => {
-            if (conversation.id === selectedConversation.id) {
-              return updatedConversation;
-            }
-
-            return conversation;
-          },
-        );
-
-        if (updatedConversations.length === 0) {
-          updatedConversations.push(updatedConversation);
-        }
-
-        setConversations(updatedConversations);
-        saveConversations(updatedConversations);
-
-        setLoading(false);
-        setMessageIsStreaming(false);
-      }
     }
   };
-
-  // FETCH MODELS ----------------------------------------------
-
-  const fetchModels = async (key: string) => {
-    const error = {
-      title: t('Error fetching models.'),
-      code: null,
-      messageLines: [
-        t(
-          'Make sure your OpenAI API key is set in the bottom left of the sidebar.',
-        ),
-        t('If you completed this step, OpenAI may be experiencing issues.'),
-      ],
-    } as ErrorMessage;
-
-    const response = await fetch('/api/models', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        key,
-      }),
-    });
-
-    if (!response.ok) {
-      try {
-        const data = await response.json();
-        Object.assign(error, {
-          code: data.error?.code,
-          messageLines: [data.error?.message],
-        });
-      } catch (e) {}
-      setModelError(error);
-      return;
-    }
-
-    const data = await response.json();
-
-    if (!data) {
-      setModelError(error);
-      return;
-    }
-
-    setModels(data);
-    setModelError(null);
-  };
-
-  // BASIC HANDLERS --------------------------------------------
 
   const handleLightMode = (mode: 'dark' | 'light') => {
     setLightMode(mode);
     localStorage.setItem('theme', mode);
-  };
-
-  const handleApiKeyChange = (apiKey: string) => {
-    setApiKey(apiKey);
-    localStorage.setItem('apiKey', apiKey);
-  };
-
-  const handlePluginKeyChange = (pluginKey: PluginKey) => {
-    if (pluginKeys.some((key) => key.pluginId === pluginKey.pluginId)) {
-      const updatedPluginKeys = pluginKeys.map((key) => {
-        if (key.pluginId === pluginKey.pluginId) {
-          return pluginKey;
-        }
-
-        return key;
-      });
-
-      setPluginKeys(updatedPluginKeys);
-
-      localStorage.setItem('pluginKeys', JSON.stringify(updatedPluginKeys));
-    } else {
-      setPluginKeys([...pluginKeys, pluginKey]);
-
-      localStorage.setItem(
-        'pluginKeys',
-        JSON.stringify([...pluginKeys, pluginKey]),
-      );
-    }
-  };
-
-  const handleClearPluginKey = (pluginKey: PluginKey) => {
-    const updatedPluginKeys = pluginKeys.filter(
-      (key) => key.pluginId !== pluginKey.pluginId,
-    );
-
-    if (updatedPluginKeys.length === 0) {
-      setPluginKeys([]);
-      localStorage.removeItem('pluginKeys');
-      return;
-    }
-
-    setPluginKeys(updatedPluginKeys);
-
-    localStorage.setItem('pluginKeys', JSON.stringify(updatedPluginKeys));
   };
 
   const handleToggleChatbar = () => {
@@ -647,36 +552,12 @@ const Home: React.FC<HomeProps> = ({
     }
   }, [selectedConversation]);
 
-  useEffect(() => {
-    if (apiKey) {
-      fetchModels(apiKey);
-    }
-  }, [apiKey]);
-
   // ON LOAD --------------------------------------------
 
   useEffect(() => {
     const theme = localStorage.getItem('theme');
     if (theme) {
       setLightMode(theme as 'dark' | 'light');
-    }
-
-    const apiKey = localStorage.getItem('apiKey');
-    if (serverSideApiKeyIsSet) {
-      fetchModels('');
-      setApiKey('');
-      localStorage.removeItem('apiKey');
-    } else if (apiKey) {
-      setApiKey(apiKey);
-      fetchModels(apiKey);
-    }
-
-    const pluginKeys = localStorage.getItem('pluginKeys');
-    if (serverSidePluginKeysSet) {
-      setPluginKeys([]);
-      localStorage.removeItem('pluginKeys');
-    } else if (pluginKeys) {
-      setPluginKeys(JSON.parse(pluginKeys));
     }
 
     if (window.innerWidth < 640) {
@@ -763,8 +644,6 @@ const Home: React.FC<HomeProps> = ({
                   conversations={conversations}
                   lightMode={lightMode}
                   selectedConversation={selectedConversation}
-                  apiKey={apiKey}
-                  pluginKeys={pluginKeys}
                   folders={folders.filter((folder) => folder.type === 'chat')}
                   onToggleLightMode={handleLightMode}
                   onCreateFolder={(name) => handleCreateFolder(name, 'chat')}
@@ -774,12 +653,9 @@ const Home: React.FC<HomeProps> = ({
                   onSelectConversation={handleSelectConversation}
                   onDeleteConversation={handleDeleteConversation}
                   onUpdateConversation={handleUpdateConversation}
-                  onApiKeyChange={handleApiKeyChange}
                   onClearConversations={handleClearConversations}
                   onExportConversations={handleExportData}
                   onImportConversations={handleImportConversations}
-                  onPluginKeyChange={handlePluginKeyChange}
-                  onClearPluginKey={handleClearPluginKey}
                 />
 
                 <button
@@ -806,58 +682,19 @@ const Home: React.FC<HomeProps> = ({
               <Chat
                 conversation={selectedConversation}
                 messageIsStreaming={messageIsStreaming}
-                apiKey={apiKey}
-                serverSideApiKeyIsSet={serverSideApiKeyIsSet}
-                defaultModelId={defaultModelId}
-                modelError={modelError}
-                models={models}
                 loading={loading}
-                prompts={prompts}
                 onSend={handleSend}
                 onUpdateConversation={handleUpdateConversation}
                 onEditMessage={handleEditMessage}
                 stopConversationRef={stopConversationRef}
               />
             </div>
-
-            {showPromptbar ? (
-              <div>
-                <Promptbar
-                  prompts={prompts}
-                  folders={folders.filter((folder) => folder.type === 'prompt')}
-                  onCreatePrompt={handleCreatePrompt}
-                  onUpdatePrompt={handleUpdatePrompt}
-                  onDeletePrompt={handleDeletePrompt}
-                  onCreateFolder={(name) => handleCreateFolder(name, 'prompt')}
-                  onDeleteFolder={handleDeleteFolder}
-                  onUpdateFolder={handleUpdateFolder}
-                />
-                <button
-                  className="fixed top-5 right-[270px] z-50 h-7 w-7 hover:text-gray-400 dark:text-white dark:hover:text-gray-300 sm:top-0.5 sm:right-[270px] sm:h-8 sm:w-8 sm:text-neutral-700"
-                  onClick={handleTogglePromptbar}
-                >
-                  <IconArrowBarRight />
-                </button>
-                <div
-                  onClick={handleTogglePromptbar}
-                  className="absolute top-0 left-0 z-10 h-full w-full bg-black opacity-70 sm:hidden"
-                ></div>
-              </div>
-            ) : (
-              <button
-                className="fixed top-2.5 right-4 z-50 h-7 w-7 text-white hover:text-gray-400 dark:text-white dark:hover:text-gray-300 sm:top-0.5 sm:right-4 sm:h-8 sm:w-8 sm:text-neutral-700"
-                onClick={handleTogglePromptbar}
-              >
-                <IconArrowBarLeft />
-              </button>
-            )}
           </div>
         </main>
       )}
     </>
   );
 };
-export default Home;
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => {
   const defaultModelId =

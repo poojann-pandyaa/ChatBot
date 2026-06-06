@@ -19,6 +19,21 @@ pipeline {
             }
         }
         
+        stage('Unit Testing') {
+            steps {
+                sh '''
+                python3 -m venv venv
+                . venv/bin/activate
+                pip install --upgrade pip
+                pip install -r services/rag-engine/requirements.txt
+                pip install -r services/app-gateway/requirements.txt
+                pip install pytest pytest-asyncio pytest-mock kubernetes
+                PYTHONPATH=services/rag-engine pytest services/rag-engine/tests/
+                PYTHONPATH=services/app-gateway pytest services/app-gateway/tests/
+                '''
+            }
+        }
+        
         stage('SonarQube Static Analysis') {
             steps {
                 withSonarQubeEnv('sonar-server') {
@@ -62,17 +77,17 @@ pipeline {
             parallel {
                 stage('Scan RAG Engine') {
                     steps {
-                        sh "trivy image ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} > trivy-rag-report.json"
+                        sh "trivy image --exit-code 1 --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} > trivy-rag-report.json"
                     }
                 }
                 stage('Scan App Gateway') {
                     steps {
-                        sh "trivy image ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} > trivy-gateway-report.json"
+                        sh "trivy image --exit-code 1 --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} > trivy-gateway-report.json"
                     }
                 }
                 stage('Scan Frontend') {
                     steps {
-                        sh "trivy image ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} > trivy-frontend-report.json"
+                        sh "trivy image --exit-code 1 --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} > trivy-frontend-report.json"
                     }
                 }
             }
@@ -92,10 +107,73 @@ pipeline {
         
         stage('Orchestrate Deploy via Ansible') {
             steps {
-                sh """
-                ansible-playbook -i ansible/inventory.ini ansible/playbooks/deploy.yml \
-                  --extra-vars "docker_registry=${DOCKER_REGISTRY} image_tag=${IMAGE_TAG}"
-                """
+                script {
+                    ansiblePlaybook(
+                        playbook: 'ansible/playbooks/deploy.yml',
+                        inventory: 'ansible/inventory.ini',
+                        extraVars: [
+                            docker_registry: "${env.DOCKER_REGISTRY}",
+                            image_tag: "${env.IMAGE_TAG}",
+                            ansible_python_interpreter: "${WORKSPACE}/venv/bin/python"
+                        ],
+                        colorized: true
+                    )
+                }
+            }
+        }
+        
+        stage('Database Seeding') {
+            steps {
+                sh '''
+                # Start port-forwarding in background
+                kubectl port-forward svc/qdrant 6333:6333 -n llmops-platform &
+                QDRANT_PID=$!
+                kubectl port-forward svc/elasticsearch 9200:9200 -n llmops-platform &
+                ES_PID=$!
+                kubectl port-forward svc/ml-service 8000:8000 -n llmops-platform &
+                ML_PID=$!
+                
+                # Wait for port-forwarding to establish
+                sleep 5
+                
+                # Run ingestion script
+                . venv/bin/activate
+                python3 training/ingestion/run_ingestion.py --limit 1000
+                
+                # Kill port-forwarding processes
+                kill $QDRANT_PID $ES_PID $ML_PID || true
+                '''
+            }
+        }
+        
+        stage('Sanity Verification') {
+            steps {
+                sh '''
+                # Start port-forwarding for app-gateway
+                kubectl port-forward svc/app-gateway 8089:8080 -n llmops-platform &
+                GW_PID=$!
+                
+                # Wait for port-forwarding to establish
+                sleep 5
+                
+                # Send a curl request and verify output
+                RESPONSE=$(curl -s -X POST http://localhost:8089/api/chat \
+                  -H "Content-Type: application/json" \
+                  -d '{"prompt": "How do I reverse a list in Python?", "conversation_id": "sanity-check", "debug": true}')
+                  
+                echo "Sanity Check Response: $RESPONSE"
+                
+                # Kill port-forwarding
+                kill $GW_PID || true
+                
+                # Verify response contains expected fields
+                if echo "$RESPONSE" | grep -q '"answer"'; then
+                  echo "Sanity Check Passed!"
+                else
+                  echo "Sanity Check Failed!"
+                  exit 1
+                fi
+                '''
             }
         }
     }

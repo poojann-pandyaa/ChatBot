@@ -15,6 +15,8 @@ spec:
       labels:
         app: elasticsearch
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
       - name: elasticsearch
         image: elasticsearch:8.12.1
@@ -25,17 +27,20 @@ spec:
         - name: xpack.security.enabled
           value: "false"
         - name: ES_JAVA_OPTS
-          value: "-Xms512m -Xmx512m"
+          value: "-Xms256m -Xmx256m"
         ports:
         - containerPort: 9200
           name: http
         resources:
           requests:
-            memory: "512Mi"
+            memory: "256Mi"
             cpu: "200m"
           limits:
-            memory: "2Gi"
+            memory: "1Gi"
             cpu: "1000m"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
         readinessProbe:
           httpGet:
             path: /
@@ -48,6 +53,24 @@ spec:
             port: 9200
           initialDelaySeconds: 20
           periodSeconds: 10
+      volumes:
+      - name: elasticsearch-data
+        persistentVolumeClaim:
+          claimName: elasticsearch-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-pvc
+  namespace: {{ k8s_namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
 ---
 apiVersion: v1
 kind: Service

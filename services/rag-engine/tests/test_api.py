@@ -26,7 +26,8 @@ def test_metrics_endpoint():
 
 @patch("app.classifier.classify")
 @patch("app.engine.execute")
-def test_reasoning_chat_endpoint(mock_execute, mock_classify):
+@patch("app.engine.generator.generate")
+def test_reasoning_chat_endpoint(mock_generate, mock_execute, mock_classify):
     # Setup mock classifier response
     mock_classify.return_value = {
         "intent": "procedural",
@@ -56,9 +57,14 @@ def test_reasoning_chat_endpoint(mock_execute, mock_classify):
     mock_trace.to_dict.return_value = {"trace_key": "trace_val"}
 
     # Mock async execute method
-    async def mock_async_execute(trace):
+    async def mock_async_execute(trace, *args, **kwargs):
         return mock_trace
     mock_execute.side_effect = mock_async_execute
+
+    # Mock async generate method
+    async def mock_async_generate(trace, *args, **kwargs):
+        return mock_trace
+    mock_generate.side_effect = mock_async_generate
 
     # Make request
     response = client.post(

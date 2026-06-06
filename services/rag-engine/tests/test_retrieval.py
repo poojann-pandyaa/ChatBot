@@ -17,7 +17,7 @@ def mock_retriever():
             es_url="http://mock-es:9200"
         )
         # Mock the embedding method
-        retriever._embed = MagicMock(return_value=np.zeros(768, dtype=np.float32))
+        retriever._embed = AsyncMock(return_value=np.zeros(768, dtype=np.float32))
         return retriever
 
 

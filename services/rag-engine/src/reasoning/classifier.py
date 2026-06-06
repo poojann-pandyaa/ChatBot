@@ -1,8 +1,7 @@
+import asyncio
 import os
 import re
-import torch
 from typing import Optional
-from transformers import pipeline
 
 CLASSIFIER_PROMPT = """Classify the query into one reasoning type: commonsense, adaptive, or strategic.
 
@@ -148,83 +147,22 @@ def _generate_fallback_subquestions(query: str, reasoning_type: str) -> list:
     return [query]
 
 
+import httpx
+
 class QueryClassifier:
-    def __init__(self, model_name: str = "google/flan-t5-base"):
-        print(f"Loading local LLM for classification: {model_name}...")
-        device = (
-            "cuda" if torch.cuda.is_available()
-            else "mps" if torch.backends.mps.is_available()
-            else "cpu"
-        )
-        print(f"Device set to use {device}")
-        
-        # Safe device loading for transformers pipeline
-        pipe_device = device
-        if device == "cpu":
-            pipe_device = -1
+    def __init__(self, ml_service_url: str = None):
+        self.ml_service_url = ml_service_url or os.getenv("ML_SERVICE_URL", "http://localhost:8000")
+        self.client = httpx.AsyncClient(base_url=self.ml_service_url, timeout=30.0)
+        print(f"QueryClassifier initialized. ML Service URL: {self.ml_service_url}")
 
-        self.pipeline = pipeline(
-            "text2text-generation",
-            model=model_name,
-            max_new_tokens=128,
-            truncation=True,
-            max_length=512,
-            device=pipe_device,
-        )
-
-    def classify(self, query: str) -> dict:
+    async def classify(self, query: str) -> dict:
         try:
-            prompt = CLASSIFIER_PROMPT.format(query=query)
-            outputs = self.pipeline(prompt)
-            response = outputs[0]["generated_text"].strip()
-
-            parsed = {
-                "intent": "factual",
-                "reasoning_type": "commonsense",
-                "entities": [],
-                "scope": "single_topic",
-                "ambiguity": "low",
-                "sub_questions": [query],
-            }
-
-            for line in response.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                key, _, value = line.partition(":")
-                key = key.strip().lower()
-                value = value.strip().lower()
-
-                if key == "intent" and value in VALID_INTENTS:
-                    parsed["intent"] = value
-
-                elif key == "reasoning type":
-                    for rt in VALID_REASONING_TYPES:
-                        if rt in value:
-                            parsed["reasoning_type"] = rt
-                            break
-
-                elif key == "scope":
-                    parsed["scope"] = "multi_topic" if "multi" in value else "single_topic"
-
-                elif key == "sub-questions":
-                    raw_sqs = line.split(":", 1)[1].strip()
-                    if raw_sqs:
-                        sqs = [sq.strip() for sq in raw_sqs.split(",") if sq.strip()]
-                        if sqs:
-                            parsed["sub_questions"] = sqs
-
-            keyword_type = _keyword_fallback(query)
-            if keyword_type and parsed["reasoning_type"] == "commonsense":
-                parsed["reasoning_type"] = keyword_type
-                parsed["scope"] = "multi_topic"
-                if len(parsed["sub_questions"]) == 1:
-                    parsed["sub_questions"] = _generate_fallback_subquestions(
-                        query, keyword_type
-                    )
-
-            return parsed
-
+            response = await self.client.post("/classify", json={"query": query})
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"ML Service returned status code {response.status_code}: {response.text}")
+                raise Exception(f"ML Service error: {response.text}")
         except Exception as e:
             print(f"Classification failed: {e}")
             keyword_type = _keyword_fallback(query) or "commonsense"
@@ -236,3 +174,7 @@ class QueryClassifier:
                 "ambiguity": "low",
                 "sub_questions": [query],
             }
+
+    async def close(self):
+        await self.client.aclose()
+

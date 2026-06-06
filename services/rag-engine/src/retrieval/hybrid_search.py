@@ -1,13 +1,9 @@
 import os
 import asyncio
 import numpy as np
-from transformers import AutoTokenizer, AutoModel
-import torch
-import torch.nn.functional as F
+import httpx
 from qdrant_client import AsyncQdrantClient
 from elasticsearch import AsyncElasticsearch
-
-EMBED_MODEL = "BAAI/bge-base-en-v1.5"
 
 
 class HybridRetriever:
@@ -15,40 +11,34 @@ class HybridRetriever:
         self,
         qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
         es_url=os.getenv("ELASTICSEARCH_URL", "http://localhost:9200"),
+        ml_service_url=os.getenv("ML_SERVICE_URL", "http://localhost:8000"),
         collection_name="stackexchange_chunks",
         es_index="stackexchange_chunks",
     ):
         print(f"Initializing HybridRetriever...")
         print(f"Qdrant URL: {qdrant_url}")
         print(f"Elasticsearch URL: {es_url}")
+        print(f"ML Service URL: {ml_service_url}")
         
         self.qdrant_client = AsyncQdrantClient(url=qdrant_url)
         self.es_client = AsyncElasticsearch(es_url)
+        self.ml_service_url = ml_service_url
+        self.http_client = httpx.AsyncClient(base_url=self.ml_service_url, timeout=30.0)
         
         self.qdrant_collection = collection_name
         self.es_index = es_index
 
-        print("Loading local embedding model...")
-        self.device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-        self.tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL)
-        self.model = AutoModel.from_pretrained(EMBED_MODEL).to(self.device)
-        self.model.eval()
-        print(f"Embedding model loaded on device: {self.device}")
-
-    def _embed(self, text: str) -> np.ndarray:
-        """Embed a single query string. Returns float32 array shape (768,)."""
-        encoded = self.tokenizer(
-            [text],
-            padding=True,
-            truncation=True,
-            max_length=256,
-            return_tensors="pt",
-        ).to(self.device)
-        with torch.no_grad():
-            output = self.model(**encoded)
-        emb = output.last_hidden_state[:, 0, :]       # CLS token
-        emb = F.normalize(emb, p=2, dim=1)            # L2 normalise
-        return emb.cpu().squeeze(0).numpy().astype("float32")
+    async def _embed(self, text: str) -> np.ndarray:
+        try:
+            response = await self.http_client.post("/embed", json={"text": text})
+            if response.status_code == 200:
+                vector = response.json()["embedding"]
+                return np.array(vector, dtype="float32")
+            else:
+                raise Exception(f"ML Service /embed returned {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"Embedding failed: {e}")
+            return np.zeros(768, dtype="float32")
 
     async def _dense_search(self, q_embedding: np.ndarray, top_k: int):
         try:
@@ -96,7 +86,7 @@ class HybridRetriever:
 
     async def hybrid_retrieve(self, query: str, top_k: int = 20):
         # 1. Embed query
-        q_embedding = self._embed(query)
+        q_embedding = await self._embed(query)
 
         # 2. Parallel Dense & Sparse search calls
         dense_task = self._dense_search(q_embedding, top_k)
@@ -132,6 +122,7 @@ class HybridRetriever:
 
     async def close(self):
         await self.es_client.close()
+        await self.http_client.aclose()
 
 
 if __name__ == "__main__":

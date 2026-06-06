@@ -46,3 +46,4 @@ outputs/
 *.gguf
 *.faiss
 *.pkl
+**/hf_cache/
