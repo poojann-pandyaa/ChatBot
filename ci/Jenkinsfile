@@ -6,7 +6,7 @@ pipeline {
     }
     
     tools {
-        nodejs 'node19'
+        nodejs 'node20'
     }
     
     environment {
