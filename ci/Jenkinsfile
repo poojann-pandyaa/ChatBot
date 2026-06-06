@@ -12,7 +12,7 @@ pipeline {
     environment {
         DOCKER_REGISTRY = 'poojan'
         IMAGE_TAG = 'latest'
-        SCANNER_HOME = tool 'sonar-scanner'
+        PATH = "/opt/homebrew/bin:/usr/local/bin:${env.PATH}"
     }
     
     stages {
