@@ -99,18 +99,12 @@ pipeline {
         
         stage('Orchestrate Deploy via Ansible') {
             steps {
-                script {
-                    ansiblePlaybook(
-                        playbook: 'ansible/playbooks/deploy.yml',
-                        inventory: 'ansible/inventory.ini',
-                        extraVars: [
-                            docker_registry: "${env.DOCKER_REGISTRY}",
-                            image_tag: "${env.IMAGE_TAG}",
-                            ansible_python_interpreter: "${WORKSPACE}/venv/bin/python"
-                        ],
-                        colorized: true
-                    )
-                }
+                sh """
+                ansible-playbook -i ansible/inventory.ini ansible/playbooks/deploy.yml \
+                    -e docker_registry=${env.DOCKER_REGISTRY} \
+                    -e image_tag=${env.IMAGE_TAG} \
+                    -e ansible_python_interpreter=${WORKSPACE}/venv/bin/python
+                """
             }
         }
         
