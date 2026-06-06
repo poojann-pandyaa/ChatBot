@@ -145,7 +145,7 @@ pipeline {
                 # Send a curl request and verify output
                 RESPONSE=$(curl -s -X POST http://localhost:8089/api/chat \
                   -H "Content-Type: application/json" \
-                  -d '{"prompt": "How do I reverse a list in Python?", "conversation_id": "sanity-check", "debug": true}')
+                  -d '{"prompt": "How do I reverse a list in Python?", "conversation_id": "sanity-check", "debug": true, "stream": false}')
                   
                 echo "Sanity Check Response: $RESPONSE"
                 
