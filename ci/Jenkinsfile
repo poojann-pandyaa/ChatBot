@@ -87,7 +87,8 @@ pipeline {
         stage('Push to Registry') {
             steps {
                 script {
-                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                    withCredentials([usernamePassword(credentialsId: 'docker', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                        sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
                         sh "docker push ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG}"
