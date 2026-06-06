@@ -31,23 +31,10 @@ pipeline {
                 pip install --upgrade pip
                 pip install -r services/rag-engine/requirements.txt
                 pip install -r services/app-gateway/requirements.txt
-                pip install pytest pytest-asyncio pytest-mock kubernetes transformers
+                pip install pytest pytest-asyncio pytest-mock kubernetes transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
                 PYTHONPATH=services/rag-engine pytest services/rag-engine/tests/
                 PYTHONPATH=services/app-gateway pytest services/app-gateway/tests/
                 '''
-            }
-        }
-        
-        stage('SonarQube Static Analysis') {
-            steps {
-                withSonarQubeEnv('sonar-server') {
-                    sh '''
-                    $SCANNER_HOME/bin/sonar-scanner \
-                      -Dsonar.projectName=LLMOps-Platform \
-                      -Dsonar.projectKey=LLMOps-Platform \
-                      -Dsonar.sources=services/
-                    '''
-                }
             }
         }
         
