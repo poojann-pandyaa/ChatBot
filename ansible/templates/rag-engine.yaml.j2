@@ -18,7 +18,7 @@ spec:
       containers:
       - name: rag-engine
         image: {{ docker_registry }}/rag-engine:{{ image_tag }}
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         env:
         - name: ML_SERVICE_URL
           value: "http://ml-service:8000"

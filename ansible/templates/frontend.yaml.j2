@@ -18,7 +18,7 @@ spec:
       containers:
       - name: frontend
         image: {{ docker_registry }}/frontend:{{ image_tag }}
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         env:
         - name: APP_GATEWAY_URL
           value: "http://app-gateway:8080"

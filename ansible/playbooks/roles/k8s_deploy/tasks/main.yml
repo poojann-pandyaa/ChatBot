@@ -94,6 +94,13 @@
     - app-gateway
     - frontend
 
+- name: Force rollout restart of microservices to pull latest images
+  shell: "kubectl rollout restart deployment/{{ item }} -n {{ k8s_namespace }}"
+  loop:
+    - rag-engine
+    - app-gateway
+    - frontend
+
 - name: Wait for all application rollouts to complete
   kubernetes.core.k8s_info:
     kind: Deployment

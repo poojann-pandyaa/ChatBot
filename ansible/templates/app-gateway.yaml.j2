@@ -18,7 +18,7 @@ spec:
       containers:
       - name: app-gateway
         image: {{ docker_registry }}/app-gateway:{{ image_tag }}
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         env:
         - name: RAG_ENGINE_URL
           value: "http://rag-engine:8000"
