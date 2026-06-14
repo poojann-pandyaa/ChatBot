@@ -1,5 +1,4 @@
 import os
-import time
 import json
 import hashlib
 import asyncio
@@ -7,7 +6,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 import redis.asyncio as redis
 from redis.commands.search.field import VectorField, TextField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
@@ -17,9 +16,6 @@ from src.reasoning.classifier import QueryClassifier
 from src.reasoning.engine import ReasoningEngine
 from src.generation.trace import ReasoningTrace
 from src.reasoning.router import RouterAgent
-
-# Prometheus client imports
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 app = FastAPI(title="Reasoning RAG Engine API", version="1.0.0")
 
@@ -73,73 +69,6 @@ async def startup_event():
         except Exception as idx_err:
             print(f"Failed to create Redis Search index: {idx_err}")
 
-async def save_to_cache(query: str, vector: list, answer: str, reasoning_type: str, sources: list):
-    try:
-        q_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
-        key = f"cache:{q_hash}"
-        embedding_bytes = np.array(vector, dtype=np.float32).tobytes()
-        
-        await redis_raw_client.hset(
-            key,
-            mapping={
-                "embedding": embedding_bytes,
-                "query": query.encode("utf-8"),
-                "answer": answer.encode("utf-8"),
-                "reasoning_type": reasoning_type.encode("utf-8"),
-                "sources": json.dumps(sources).encode("utf-8")
-            }
-        )
-        # Set TTL to 24 hours
-        await redis_raw_client.expire(key, 86400)
-        print(f"Saved query to semantic cache: {key}")
-    except Exception as e:
-        print(f"Failed to save to semantic cache: {e}")
-
-# Prometheus Metrics
-LATENCY_HISTOGRAM = Histogram(
-    "rag_request_latency_seconds",
-    "Time spent processing reasoning request",
-    ["reasoning_type"]
-)
-CLASSIFY_LATENCY = Histogram(
-    "rag_classification_latency_seconds",
-    "Time spent in query classification"
-)
-RETRIEVAL_LATENCY = Histogram(
-    "rag_retrieval_latency_seconds",
-    "Time spent performing hybrid search and reranking"
-)
-GENERATION_LATENCY = Histogram(
-    "rag_generation_latency_seconds",
-    "Time spent in Ollama generation"
-)
-REQUEST_COUNTER = Counter(
-    "rag_requests_total",
-    "Total count of reasoning requests",
-    ["reasoning_type", "status"]
-)
-
-# Router Agent metrics
-FOLLOWUP_COUNTER = Counter(
-    "rag_followup_detections_total",
-    "Count of queries detected as follow-ups",
-    ["detected"]  # "true" or "false"
-)
-RETRIEVAL_RETRY = Counter(
-    "rag_retrieval_retries_total",
-    "Count of retrieval quality gate retries",
-    ["reason"]  # "low_relevance" or "no_results"
-)
-QUALITY_GATE_SCORE = Histogram(
-    "rag_quality_gate_score",
-    "Average reranker score at quality gate evaluation"
-)
-ROUTER_PATH = Counter(
-    "rag_router_path_total",
-    "Count of queries per router path",
-    ["path"]  # "cache_hit", "simple_rag", "multi_step_rag", "retry_rag"
-)
-
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -162,6 +91,8 @@ class ChatResponse(BaseModel):
     reasoning_type: str
     sources: List[SourceMetadata]
     trace: Optional[Dict[str, Any]] = None
+
+
 def safe_decode(val) -> str:
     if val is None:
         return ""
@@ -175,30 +106,18 @@ router = RouterAgent(classifier, engine, redis_raw_client, safe_decode)
 
 @app.post("/v1/reasoning-chat", response_model=ChatResponse)
 async def reasoning_chat(request: ChatRequest):
-    metrics_callback = {
-        "latency_histogram": LATENCY_HISTOGRAM,
-        "classify_latency": CLASSIFY_LATENCY,
-        "retrieval_latency": RETRIEVAL_LATENCY,
-        "generation_latency": GENERATION_LATENCY,
-        "request_counter": REQUEST_COUNTER,
-        "followup_counter": FOLLOWUP_COUNTER,
-        "retry_counter": RETRIEVAL_RETRY,
-        "quality_score_histogram": QUALITY_GATE_SCORE,
-        "path_counter": ROUTER_PATH,
-    }
-    
     try:
         res = await router.route(
             prompt=request.prompt,
             history=request.history,
             stream=request.stream,
             include_trace=request.include_trace,
-            metrics_callback=metrics_callback
+            metrics_callback={}
         )
-        
+
         if request.stream:
             return StreamingResponse(res["streaming_response"], media_type="application/x-ndjson")
-            
+
         formatted_sources = [
             SourceMetadata(
                 chunk_id=s.get("chunk_id"),
@@ -210,7 +129,7 @@ async def reasoning_chat(request: ChatRequest):
             )
             for s in res["sources"]
         ]
-        
+
         return ChatResponse(
             answer=res["answer"],
             reasoning_type=res["reasoning_type"],
@@ -218,7 +137,6 @@ async def reasoning_chat(request: ChatRequest):
             trace=res["trace"]
         )
     except Exception as e:
-        REQUEST_COUNTER.labels(reasoning_type="unknown", status="error").inc()
         print(f"Error in reasoning-chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -226,11 +144,6 @@ async def reasoning_chat(request: ChatRequest):
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
-
-@app.get("/metrics")
-def metrics():
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.on_event("shutdown")
