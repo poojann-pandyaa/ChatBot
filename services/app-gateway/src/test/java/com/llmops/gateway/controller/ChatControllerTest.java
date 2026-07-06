@@ -1,8 +1,10 @@
 package com.llmops.gateway.controller;
 
-import com.llmops.gateway.client.RagEngineClient;
+import com.llmops.gateway.grpc.RagEngineGrpcClient;
 import com.llmops.gateway.model.UserChatRequest;
 import com.llmops.gateway.repository.ConversationRepository;
+import com.llmops.gateway.service.ConversationCommandService;
+import com.llmops.gateway.service.ConversationQueryService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -27,13 +29,18 @@ public class ChatControllerTest {
     private WebTestClient webTestClient;
     private ReactiveRedisTemplate<String, String> redisTemplate;
     private ConversationRepository conversationRepository;
-    private RagEngineClient ragEngineClient;
+    private RagEngineGrpcClient ragEngineClient;
+    private ConversationCommandService conversationCommandService;
+    private ConversationQueryService conversationQueryService;
 
     @BeforeEach
     public void setup() {
         redisTemplate = Mockito.mock(ReactiveRedisTemplate.class);
         conversationRepository = Mockito.mock(ConversationRepository.class);
-        ragEngineClient = Mockito.mock(RagEngineClient.class);
+        ragEngineClient = Mockito.mock(RagEngineGrpcClient.class);
+        conversationCommandService = Mockito.mock(ConversationCommandService.class);
+        conversationQueryService = Mockito.mock(ConversationQueryService.class);
+        
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         PrometheusMeterRegistry prometheusRegistry = Mockito.mock(PrometheusMeterRegistry.class);
 
@@ -45,7 +52,15 @@ public class ChatControllerTest {
 
         when(conversationRepository.existsById(anyString())).thenReturn(false);
 
-        ChatController controller = new ChatController(redisTemplate, conversationRepository, ragEngineClient, meterRegistry, prometheusRegistry);
+        ChatController controller = new ChatController(
+                redisTemplate,
+                conversationRepository,
+                ragEngineClient,
+                conversationCommandService,
+                conversationQueryService,
+                meterRegistry,
+                prometheusRegistry
+        );
         webTestClient = WebTestClient.bindToController(controller).build();
     }
 
@@ -67,7 +82,7 @@ public class ChatControllerTest {
         );
         when(ragEngineClient.chat(any())).thenReturn(Mono.just(mockRes));
 
-        UserChatRequest request = new UserChatRequest("Hello", "session-123", false, false);
+        UserChatRequest request = new UserChatRequest("Hello", "session-123", false, false, "user-456");
 
         webTestClient.post().uri("/api/chat")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -77,5 +92,25 @@ public class ChatControllerTest {
                 .expectBody()
                 .jsonPath("$.answer").isEqualTo("This is the RAG answer")
                 .jsonPath("$.reasoning_type").isEqualTo("commonsense");
+    }
+
+    @Test
+    public void testGetHistoryEndpoint() {
+        Map<String, Object> mockHistory = Map.of(
+                "conversation_id", "session-123",
+                "messages", List.of(
+                        Map.of("role", "user", "content", "Hello"),
+                        Map.of("role", "assistant", "content", "This is the RAG answer")
+                )
+        );
+        when(conversationQueryService.getConversationHistory("session-123")).thenReturn(Mono.just(mockHistory));
+
+        webTestClient.get().uri("/api/history/session-123")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.conversation_id").isEqualTo("session-123")
+                .jsonPath("$.messages[0].role").isEqualTo("user")
+                .jsonPath("$.messages[1].role").isEqualTo("assistant");
     }
 }

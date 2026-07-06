@@ -20,8 +20,14 @@ spec:
         image: {{ docker_registry }}/app-gateway:{{ image_tag }}
         imagePullPolicy: IfNotPresent
         env:
-        - name: RAG_ENGINE_URL
-          value: "http://rag-engine:8000"
+        - name: RAG_ENGINE_GRPC_HOST
+          value: "rag-engine"
+        - name: RAG_ENGINE_GRPC_PORT
+          value: "9091"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "redpanda:29092"
+        - name: REPLICA_DATASOURCE_URL
+          value: "jdbc:postgresql://postgres-replica:5432/chatbot_db"
         - name: REDIS_HOST
           value: "redis"
         - name: REDIS_PORT

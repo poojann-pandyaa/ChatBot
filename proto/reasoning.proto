@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.llmops.proto";
+option java_outer_classname = "ReasoningProto";
+
+package reasoning;
+
+// ─── Chat History ─────────────────────────────────────────────────────────────
+
+message ChatHistoryEntry {
+  string role    = 1;  // "user" | "assistant"
+  string content = 2;
+}
+
+// ─── Request ──────────────────────────────────────────────────────────────────
+
+message ReasoningChatRequest {
+  string prompt                        = 1;
+  repeated ChatHistoryEntry history     = 2;
+  bool   include_trace                 = 3;
+  bool   stream                        = 4;
+}
+
+// ─── Streaming Token ─────────────────────────────────────────────────────────
+// Each server-streaming message mirrors the original NDJSON frame shape:
+//   { "type": "token" | "trace" | "error", "data": <string | object> }
+
+message ReasoningChatChunk {
+  string type = 1;  // "token" | "trace" | "error" | "done"
+  string data = 2;  // JSON-encoded payload for trace; raw text for token
+}
+
+// ─── Non-Streaming Response ───────────────────────────────────────────────────
+
+message SourceMetadata {
+  int32  chunk_id     = 1;
+  double score        = 2;
+  string question_id  = 3;
+  bool   is_accepted  = 4;
+  string domain       = 5;
+  string chunk_text   = 6;
+}
+
+message ReasoningChatResponse {
+  string answer                       = 1;
+  string reasoning_type               = 2;
+  repeated SourceMetadata sources     = 3;
+  string trace_json                   = 4;  // serialized trace map (optional)
+}
+
+// ─── Service Definition ───────────────────────────────────────────────────────
+
+service ReasoningService {
+  // Server-streaming: app-gateway calls this for streaming mode.
+  // Each ReasoningChatChunk carries one NDJSON frame equivalent.
+  rpc StreamChat (ReasoningChatRequest) returns (stream ReasoningChatChunk);
+
+  // Unary: app-gateway calls this for non-streaming mode.
+  rpc Chat (ReasoningChatRequest) returns (ReasoningChatResponse);
+}

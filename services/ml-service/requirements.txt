@@ -1,7 +1,11 @@
-fastapi==0.110.0
-uvicorn==0.28.0
-torch==2.2.1
-transformers==4.38.2
-sentence-transformers==2.5.1
-pydantic==2.6.4
-numpy==1.26.4
+fastapi
+uvicorn
+httpx
+torch
+transformers
+sentence-transformers
+numpy
+# gRPC facade (Phase 3)
+grpcio==1.65.0
+grpcio-tools==1.65.0
+protobuf==5.27.2

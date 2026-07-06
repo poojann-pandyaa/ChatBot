@@ -10,6 +10,17 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:SuperSecureRedisPassword123}
 
+# ── gRPC server port ──────────────────────────────────────────────────────────
+grpc:
+  server:
+    port: ${GRPC_SERVER_PORT:9091}
+
+# ── gRPC client config for ml-service ────────────────────────────────────────
+ml-service:
+  grpc:
+    host: ${ML_SERVICE_GRPC_HOST:ml-service}
+    port: ${ML_SERVICE_GRPC_PORT:50051}
+
 services:
   qdrant:
     url: ${QDRANT_URL:http://localhost:6333}
@@ -17,6 +28,7 @@ services:
   elasticsearch:
     url: ${ELASTICSEARCH_URL:http://localhost:9200}
     index: stackexchange_chunks
+  # Legacy REST url kept for fallback health checks only
   ml-service:
     url: ${ML_SERVICE_URL:http://localhost:8001}
   ollama:
@@ -47,6 +59,8 @@ resilience4j:
         registerHealthIndicator: true
         slidingWindowSize: 5
         failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        automaticTransitionFromOpenToHalfOpenEnabled: true
       ollamaClient:
         registerHealthIndicator: true
         slidingWindowSize: 5
@@ -61,7 +75,10 @@ resilience4j:
         waitDuration: 1s
       mlServiceClient:
         maxAttempts: 3
-        waitDuration: 1s
+        waitDuration: 2s
+        exponentialBackoff:
+          enabled: true
+          multiplier: 2
       ollamaClient:
         maxAttempts: 3
         waitDuration: 1s

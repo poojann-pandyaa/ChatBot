@@ -22,6 +22,26 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:SuperSecureRedisPassword123}
 
+  # ── Kafka (Phase 4) ───────────────────────────────────────────────────────
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Phase 8 — idempotent producer to avoid duplicate events
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+    consumer:
+      group-id: app-gateway-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.llmops.gateway.kafka"
+
 management:
   endpoints:
     web:
@@ -31,6 +51,13 @@ management:
     health:
       show-details: always
 
+# ── gRPC client config ────────────────────────────────────────────────────────
+rag-engine:
+  grpc:
+    host: ${RAG_ENGINE_GRPC_HOST:rag-engine}
+    port: ${RAG_ENGINE_GRPC_PORT:9091}
+
+# Legacy REST url kept for health checks only (not used for chat after Phase 3)
 services:
   rag-engine:
     url: ${RAG_ENGINE_URL:http://localhost:8000}

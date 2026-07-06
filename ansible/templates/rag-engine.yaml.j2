@@ -20,8 +20,12 @@ spec:
         image: {{ docker_registry }}/rag-engine:{{ image_tag }}
         imagePullPolicy: IfNotPresent
         env:
-        - name: ML_SERVICE_URL
-          value: "http://ml-service:8000"
+        - name: ML_SERVICE_GRPC_HOST
+          value: "ml-service"
+        - name: ML_SERVICE_GRPC_PORT
+          value: "50051"
+        - name: GRPC_SERVER_PORT
+          value: "9091"
         - name: REDIS_HOST
           value: "redis"
         - name: REDIS_PORT
@@ -57,6 +61,8 @@ spec:
         ports:
         - containerPort: 8000
           name: http
+        - containerPort: 9091
+          name: grpc
         resources:
           requests:
             memory: "768Mi"
@@ -102,5 +108,8 @@ spec:
   - port: 8000
     targetPort: 8000
     name: http
+  - port: 9091
+    targetPort: 9091
+    name: grpc
   selector:
     app: rag-engine

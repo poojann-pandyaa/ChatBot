@@ -1,7 +1,7 @@
 package com.llmops.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.llmops.rag.client.MlServiceClient;
+import com.llmops.rag.grpc.MlServiceGrpcClient;
 import com.llmops.rag.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +23,7 @@ public class RouterService {
 
     private static final Logger log = LoggerFactory.getLogger(RouterService.class);
 
-    private final MlServiceClient mlServiceClient;
+    private final MlServiceGrpcClient mlServiceClient;
     private final FollowupDetector followupDetector;
     private final QualityGateService qualityGateService;
     private final ReasoningEngine reasoningEngine;
@@ -34,7 +34,7 @@ public class RouterService {
 
     @Autowired
     public RouterService(
-            MlServiceClient mlServiceClient,
+            MlServiceGrpcClient mlServiceClient,
             FollowupDetector followupDetector,
             QualityGateService qualityGateService,
             ReasoningEngine reasoningEngine,

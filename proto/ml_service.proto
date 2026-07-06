@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.llmops.proto";
+option java_outer_classname = "MlServiceProto";
+
+package mlservice;
+
+// ─── Classify ────────────────────────────────────────────────────────────────
+// Maps to ml-service ClassifyRequest / ClassifyResponse Pydantic models.
+
+message ClassifyRequest {
+  string query = 1;
+}
+
+message ClassifyResponse {
+  string intent        = 1;  // factual | procedural | comparative | conceptual | opinion | debugging
+  string reasoning_type = 2; // commonsense | adaptive | strategic
+  repeated string entities     = 3;
+  string scope         = 4;  // single_topic | multi_topic
+  string ambiguity     = 5;  // low | medium | high
+  repeated string sub_questions = 6;
+}
+
+// ─── Embed ────────────────────────────────────────────────────────────────────
+// Maps to ml-service EmbedRequest / EmbedResponse Pydantic models.
+
+message EmbedRequest {
+  string text = 1;
+}
+
+message EmbedResponse {
+  repeated float embedding = 1;
+}
+
+// ─── Rerank ───────────────────────────────────────────────────────────────────
+// Maps to ml-service RerankRequest / RerankResponse Pydantic models.
+
+message RerankRequest {
+  string          query     = 1;
+  repeated string documents = 2;
+}
+
+message RerankResponse {
+  repeated float scores = 1;
+}
+
+// ─── Service Definition ───────────────────────────────────────────────────────
+
+service MlService {
+  rpc Classify (ClassifyRequest) returns (ClassifyResponse);
+  rpc Embed    (EmbedRequest)    returns (EmbedResponse);
+  rpc Rerank   (RerankRequest)   returns (RerankResponse);
+}

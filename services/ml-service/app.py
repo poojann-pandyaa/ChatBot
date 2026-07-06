@@ -188,6 +188,19 @@ def load_models():
     reranker_model = CrossEncoder(rerank_model_name, device=device)
     print("All ML models loaded successfully.")
 
+    # ── Start gRPC server facade (daemon thread — stops when FastAPI stops) ──
+    grpc_port = int(os.environ.get("GRPC_PORT", "50051"))
+    import threading
+    import grpc_server
+    grpc_thread = threading.Thread(
+        target=grpc_server.serve,
+        args=(classify_endpoint, embed_endpoint, rerank_endpoint, grpc_port),
+        daemon=True,
+        name="grpc-server"
+    )
+    grpc_thread.start()
+    print(f"gRPC facade started on port {grpc_port}")
+
 
 # Fallback helpers
 def _keyword_fallback(query: str) -> Optional[str]:

@@ -2,7 +2,7 @@ package com.llmops.gateway.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.llmops.gateway.client.RagEngineClient;
+import com.llmops.gateway.grpc.RagEngineGrpcClient;
 import com.llmops.gateway.entity.Conversation;
 import com.llmops.gateway.model.ChatMessage;
 import com.llmops.gateway.model.ChatRequest;
@@ -35,7 +35,9 @@ public class ChatController {
 
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ConversationRepository conversationRepository;
-    private final RagEngineClient ragEngineClient;
+    private final RagEngineGrpcClient ragEngineClient;
+    private final com.llmops.gateway.service.ConversationCommandService conversationCommandService;
+    private final com.llmops.gateway.service.ConversationQueryService conversationQueryService;
     private final Counter requestCounter;
     private final PrometheusMeterRegistry prometheusRegistry;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -44,12 +46,16 @@ public class ChatController {
     public ChatController(
             ReactiveRedisTemplate<String, String> redisTemplate,
             ConversationRepository conversationRepository,
-            RagEngineClient ragEngineClient,
+            RagEngineGrpcClient ragEngineClient,
+            com.llmops.gateway.service.ConversationCommandService conversationCommandService,
+            com.llmops.gateway.service.ConversationQueryService conversationQueryService,
             MeterRegistry meterRegistry,
             PrometheusMeterRegistry prometheusRegistry) {
         this.redisTemplate = redisTemplate;
         this.conversationRepository = conversationRepository;
         this.ragEngineClient = ragEngineClient;
+        this.conversationCommandService = conversationCommandService;
+        this.conversationQueryService = conversationQueryService;
         this.prometheusRegistry = prometheusRegistry;
         this.requestCounter = Counter.builder("gateway_requests_total")
                 .description("Total requests received by the gateway")
@@ -65,20 +71,6 @@ public class ChatController {
         return redisTemplate.opsForList().range(redisKey, 0, -1)
                 .collectList()
                 .flatMap(history -> {
-                    // Save conversation title to Postgres asynchronously
-                    Mono.fromRunnable(() -> {
-                        try {
-                            if (!conversationRepository.existsById(request.conversationId())) {
-                                String title = request.prompt().length() > 50
-                                        ? request.prompt().substring(0, 50) + "..."
-                                        : request.prompt();
-                                conversationRepository.save(new Conversation(request.conversationId(), LocalDateTime.now(), title));
-                            }
-                        } catch (Exception e) {
-                            log.warn("Database metadata save failed: {}", e.getMessage());
-                        }
-                    }).subscribeOn(Schedulers.boundedElastic()).subscribe();
-
                     // 2. Log user message to Redis history
                     Mono<Long> redisPushUser = redisTemplate.opsForList().rightPush(redisKey, "user:" + request.prompt());
 
@@ -119,7 +111,16 @@ public class ChatController {
                                 })
                                 .doFinally(signalType -> {
                                     if (signalType == SignalType.ON_COMPLETE) {
-                                        redisTemplate.opsForList().rightPush(redisKey, "assistant:" + accumulatedAnswer.toString())
+                                        String finalAnswer = accumulatedAnswer.toString();
+                                        redisTemplate.opsForList().rightPush(redisKey, "assistant:" + finalAnswer)
+                                                .then(Mono.fromRunnable(() -> {
+                                                    String title = request.prompt().length() > 50
+                                                            ? request.prompt().substring(0, 50) + "..."
+                                                            : request.prompt();
+                                                    conversationCommandService.saveConversationAndEvent(
+                                                            request.conversationId(), title, request.userId(),
+                                                            request.prompt(), finalAnswer, "unknown");
+                                                }).subscribeOn(Schedulers.boundedElastic()))
                                                 .subscribe();
                                     }
                                 });
@@ -132,7 +133,16 @@ public class ChatController {
                                 ragEngineClient.chat(clientRequest)
                                         .flatMap(res -> {
                                             String answer = (String) res.getOrDefault("answer", "");
+                                            String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
                                             return redisTemplate.opsForList().rightPush(redisKey, "assistant:" + answer)
+                                                    .then(Mono.fromRunnable(() -> {
+                                                        String title = request.prompt().length() > 50
+                                                                ? request.prompt().substring(0, 50) + "..."
+                                                                : request.prompt();
+                                                        conversationCommandService.saveConversationAndEvent(
+                                                                request.conversationId(), title, request.userId(),
+                                                                request.prompt(), answer, reasoningType);
+                                                    }).subscribeOn(Schedulers.boundedElastic()))
                                                     .thenReturn(ResponseEntity.ok().body(res));
                                         })
                         );
@@ -142,30 +152,8 @@ public class ChatController {
 
     @GetMapping("/api/history/{conversationId}")
     public Mono<ResponseEntity<Object>> getHistory(@PathVariable String conversationId) {
-        String redisKey = "chat:" + conversationId;
-        return redisTemplate.opsForList().range(redisKey, 0, -1)
-                .collectList()
-                .map(messages -> {
-                    List<Map<String, String>> formattedMessages = messages.stream().map(msg -> {
-                        int colonIndex = msg.indexOf(':');
-                        if (colonIndex != -1) {
-                            return Map.of(
-                                    "role", msg.substring(0, colonIndex),
-                                    "content", msg.substring(colonIndex + 1)
-                            );
-                        } else {
-                            return Map.of(
-                                    "role", "user",
-                                    "content", msg
-                            );
-                        }
-                    }).toList();
-                    Object body = Map.of(
-                            "conversation_id", conversationId,
-                            "messages", formattedMessages
-                    );
-                    return ResponseEntity.ok(body);
-                })
+        return conversationQueryService.getConversationHistory(conversationId)
+                .map(history -> ResponseEntity.ok((Object) history))
                 .onErrorResume(e -> {
                     Object errorBody = Map.of("error", e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorBody));

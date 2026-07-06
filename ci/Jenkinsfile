@@ -29,7 +29,9 @@ pipeline {
                 python3 -m venv venv
                 . venv/bin/activate
                 pip install --upgrade pip
-                pip install requests sentence-transformers elasticsearch qdrant-client || true
+                pip install grpcio-tools==1.65.0 protobuf==5.27.2 requests sentence-transformers elasticsearch qdrant-client pytest || true
+                bash services/ml-service/generate_proto_stubs.sh
+                pytest services/ml-service/test_grpc_facade.py
                 '''
                 sh 'mvn test -Dnet.bytebuddy.experimental=true'
             }
@@ -53,6 +55,11 @@ pipeline {
                         sh "docker build -t ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} services/app-gateway/"
                     }
                 }
+                stage('Build Ml Service') {
+                    steps {
+                        sh "docker build -t ${DOCKER_REGISTRY}/ml-service:${IMAGE_TAG} services/ml-service/"
+                    }
+                }
                 stage('Build Frontend Chatbot UI') {
                     steps {
                         sh "docker build -t ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} services/frontend/"
@@ -73,6 +80,11 @@ pipeline {
                         sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} > trivy-gateway-report.json || true"
                     }
                 }
+                stage('Scan Ml Service') {
+                    steps {
+                        sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/ml-service:${IMAGE_TAG} > trivy-mlservice-report.json || true"
+                    }
+                }
                 stage('Scan Frontend') {
                     steps {
                         sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} > trivy-frontend-report.json || true"
@@ -88,6 +100,7 @@ pipeline {
                         sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
                         sh "docker push ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG}"
+                        sh "docker push ${DOCKER_REGISTRY}/ml-service:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG}"
                     }
                 }

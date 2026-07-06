@@ -15,13 +15,21 @@ public class Conversation {
     private LocalDateTime createdAt;
     
     private String title;
+    
+    @jakarta.persistence.Column(name = "user_id")
+    private String userId;
 
     public Conversation() {}
 
     public Conversation(String id, LocalDateTime createdAt, String title) {
+        this(id, createdAt, title, "default_user");
+    }
+
+    public Conversation(String id, LocalDateTime createdAt, String title, String userId) {
         this.id = id;
         this.createdAt = createdAt;
         this.title = title;
+        this.userId = userId != null ? userId : "default_user";
     }
 
     public String getId() {
@@ -46,5 +54,13 @@ public class Conversation {
 
     public void setTitle(String title) {
         this.title = title;
+    }
+
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId != null ? userId : "default_user";
     }
 }

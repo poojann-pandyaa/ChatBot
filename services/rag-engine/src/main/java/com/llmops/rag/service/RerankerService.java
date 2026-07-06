@@ -1,6 +1,6 @@
 package com.llmops.rag.service;
 
-import com.llmops.rag.client.MlServiceClient;
+import com.llmops.rag.grpc.MlServiceGrpcClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -13,10 +13,10 @@ import java.util.Map;
 @Service
 public class RerankerService {
 
-    private final MlServiceClient mlServiceClient;
+    private final MlServiceGrpcClient mlServiceClient;
 
     @Autowired
-    public RerankerService(MlServiceClient mlServiceClient) {
+    public RerankerService(MlServiceGrpcClient mlServiceClient) {
         this.mlServiceClient = mlServiceClient;
     }
 
