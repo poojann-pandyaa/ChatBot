@@ -1,0 +1,67 @@
+server:
+  port: 8000
+
+spring:
+  application:
+    name: rag-engine
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:SuperSecureRedisPassword123}
+
+services:
+  qdrant:
+    url: ${QDRANT_URL:http://localhost:6333}
+    collection: stackexchange_chunks
+  elasticsearch:
+    url: ${ELASTICSEARCH_URL:http://localhost:9200}
+    index: stackexchange_chunks
+  ml-service:
+    url: ${ML_SERVICE_URL:http://localhost:8001}
+  ollama:
+    url: ${OLLAMA_URL:http://localhost:11434}
+    model: ${OLLAMA_MODEL:gemma2:2b}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      show-details: always
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      qdrantClient:
+        registerHealthIndicator: true
+        slidingWindowSize: 5
+        failureRateThreshold: 50
+      elasticsearchClient:
+        registerHealthIndicator: true
+        slidingWindowSize: 5
+        failureRateThreshold: 50
+      mlServiceClient:
+        registerHealthIndicator: true
+        slidingWindowSize: 5
+        failureRateThreshold: 50
+      ollamaClient:
+        registerHealthIndicator: true
+        slidingWindowSize: 5
+        failureRateThreshold: 50
+  retry:
+    instances:
+      qdrantClient:
+        maxAttempts: 3
+        waitDuration: 1s
+      elasticsearchClient:
+        maxAttempts: 3
+        waitDuration: 1s
+      mlServiceClient:
+        maxAttempts: 3
+        waitDuration: 1s
+      ollamaClient:
+        maxAttempts: 3
+        waitDuration: 1s

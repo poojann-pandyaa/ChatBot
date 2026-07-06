@@ -1,14 +1,13 @@
-FROM python:3.11-slim
+# Build stage
+FROM maven:3.9.6-eclipse-temurin-21-alpine AS build
+WORKDIR /workspace
+COPY pom.xml .
+COPY src src
+RUN mvn clean package -DskipTests
 
+# Run stage
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
+COPY --from=build /workspace/target/*.jar app.jar
 EXPOSE 8080
-
-ENV PYTHONUNBUFFERED=1
-
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
