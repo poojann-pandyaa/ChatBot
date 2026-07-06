@@ -98,15 +98,23 @@ public class ChatController {
                     if (request.stream()) {
                         StringBuilder accumulatedAnswer = new StringBuilder();
 
-                        Flux<String> streamRes = ragEngineClient.streamChat(clientRequest)
-                                .doOnNext(chunk -> {
+                        Flux<JsonNode> streamRes = ragEngineClient.streamChat(clientRequest)
+                                .map(chunk -> {
                                     try {
                                         JsonNode node = mapper.readTree(chunk);
                                         if (node.has("type") && "token".equals(node.get("type").asText())) {
                                             accumulatedAnswer.append(node.get("data").asText());
                                         }
+                                        return node;
                                     } catch (Exception e) {
-                                        // Ignore parsing errors for non-token stream frames (e.g. trace metadata)
+                                        try {
+                                            return mapper.readTree(chunk.trim());
+                                        } catch (Exception ex) {
+                                            com.fasterxml.jackson.databind.node.ObjectNode errNode = mapper.createObjectNode();
+                                            errNode.put("type", "error");
+                                            errNode.put("data", e.getMessage());
+                                            return errNode;
+                                        }
                                     }
                                 })
                                 .doFinally(signalType -> {
