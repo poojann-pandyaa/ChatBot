@@ -151,32 +151,85 @@ export default function Home({
 
         setLoading(false);
 
-        const reader = data.getReader();
-        const decoder = new TextDecoder();
-        let done = false;
-        let streamBuffer = '';
-        let assistantContent = '';
-        let assistantTrace: any = undefined;
-        let isFirst = true;
+        try {
+          const reader = data.getReader();
+          const decoder = new TextDecoder();
+          let done = false;
+          let streamBuffer = '';
+          let assistantContent = '';
+          let assistantTrace: any = undefined;
+          let isFirst = true;
 
-        while (!done) {
-          if (stopConversationRef.current === true) {
-            controller.abort();
-            done = true;
-            break;
+          while (!done) {
+            if (stopConversationRef.current === true) {
+              controller.abort();
+              done = true;
+              break;
+            }
+            const { value, done: doneReading } = await reader.read();
+            done = doneReading;
+            const chunkValue = decoder.decode(value || new Uint8Array(), { stream: !doneReading });
+
+            streamBuffer += chunkValue;
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.type === 'trace') {
+                  assistantTrace = parsed.data;
+                } else if (parsed.type === 'token') {
+                  assistantContent += parsed.data;
+                } else if (parsed.type === 'error') {
+                  assistantContent += `\n[Error: ${parsed.data}]`;
+                }
+              } catch (err) {
+                console.error('Failed to parse line from stream:', line, err);
+              }
+            }
+
+            if (isFirst) {
+              isFirst = false;
+              const updatedMessages: Message[] = [
+                ...updatedConversation.messages,
+                { role: 'assistant', content: assistantContent, trace: assistantTrace },
+              ];
+
+              updatedConversation = {
+                ...updatedConversation,
+                messages: updatedMessages,
+              };
+
+              setSelectedConversation(updatedConversation);
+            } else {
+              const updatedMessages: Message[] = updatedConversation.messages.map(
+                (message, index) => {
+                  if (index === updatedConversation.messages.length - 1) {
+                    return {
+                      ...message,
+                      content: assistantContent,
+                      trace: assistantTrace || message.trace,
+                    };
+                  }
+
+                  return message;
+                },
+              );
+
+              updatedConversation = {
+                ...updatedConversation,
+                messages: updatedMessages,
+              };
+
+              setSelectedConversation(updatedConversation);
+            }
           }
-          const { value, done: doneReading } = await reader.read();
-          done = doneReading;
-          const chunkValue = decoder.decode(value || new Uint8Array(), { stream: !doneReading });
 
-          streamBuffer += chunkValue;
-          const lines = streamBuffer.split('\n');
-          streamBuffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
+          if (streamBuffer.trim()) {
             try {
-              const parsed = JSON.parse(line);
+              const parsed = JSON.parse(streamBuffer.trim());
               if (parsed.type === 'trace') {
                 assistantTrace = parsed.data;
               } else if (parsed.type === 'token') {
@@ -184,104 +237,55 @@ export default function Home({
               } else if (parsed.type === 'error') {
                 assistantContent += `\n[Error: ${parsed.data}]`;
               }
+              
+              const updatedMessages: Message[] = updatedConversation.messages.map(
+                (message, index) => {
+                  if (index === updatedConversation.messages.length - 1) {
+                    return {
+                      ...message,
+                      content: assistantContent,
+                      trace: assistantTrace || message.trace,
+                    };
+                  }
+
+                  return message;
+                },
+              );
+
+              updatedConversation = {
+                ...updatedConversation,
+                messages: updatedMessages,
+              };
+
+              setSelectedConversation(updatedConversation);
             } catch (err) {
-              console.error('Failed to parse line from stream:', line, err);
+              console.error('Failed to parse leftover line from stream:', streamBuffer, err);
             }
           }
 
-          if (isFirst) {
-            isFirst = false;
-            const updatedMessages: Message[] = [
-              ...updatedConversation.messages,
-              { role: 'assistant', content: assistantContent, trace: assistantTrace },
-            ];
+          saveConversation(updatedConversation);
 
-            updatedConversation = {
-              ...updatedConversation,
-              messages: updatedMessages,
-            };
+          const updatedConversations: Conversation[] = conversations.map(
+            (conversation) => {
+              if (conversation.id === selectedConversation.id) {
+                return updatedConversation;
+              }
 
-            setSelectedConversation(updatedConversation);
-          } else {
-            const updatedMessages: Message[] = updatedConversation.messages.map(
-              (message, index) => {
-                if (index === updatedConversation.messages.length - 1) {
-                  return {
-                    ...message,
-                    content: assistantContent,
-                    trace: assistantTrace || message.trace,
-                  };
-                }
+              return conversation;
+            },
+          );
 
-                return message;
-              },
-            );
-
-            updatedConversation = {
-              ...updatedConversation,
-              messages: updatedMessages,
-            };
-
-            setSelectedConversation(updatedConversation);
+          if (updatedConversations.length === 0) {
+            updatedConversations.push(updatedConversation);
           }
+
+          setConversations(updatedConversations);
+          saveConversations(updatedConversations);
+        } catch (err) {
+          console.error('Error handling streaming response:', err);
+        } finally {
+          setMessageIsStreaming(false);
         }
-
-        if (streamBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(streamBuffer.trim());
-            if (parsed.type === 'trace') {
-              assistantTrace = parsed.data;
-            } else if (parsed.type === 'token') {
-              assistantContent += parsed.data;
-            } else if (parsed.type === 'error') {
-              assistantContent += `\n[Error: ${parsed.data}]`;
-            }
-            
-            const updatedMessages: Message[] = updatedConversation.messages.map(
-              (message, index) => {
-                if (index === updatedConversation.messages.length - 1) {
-                  return {
-                    ...message,
-                    content: assistantContent,
-                    trace: assistantTrace || message.trace,
-                  };
-                }
-
-                return message;
-              },
-            );
-
-            updatedConversation = {
-              ...updatedConversation,
-              messages: updatedMessages,
-            };
-
-            setSelectedConversation(updatedConversation);
-          } catch (err) {
-            console.error('Failed to parse leftover line from stream:', streamBuffer, err);
-          }
-        }
-
-        saveConversation(updatedConversation);
-
-        const updatedConversations: Conversation[] = conversations.map(
-          (conversation) => {
-            if (conversation.id === selectedConversation.id) {
-              return updatedConversation;
-            }
-
-            return conversation;
-          },
-        );
-
-        if (updatedConversations.length === 0) {
-          updatedConversations.push(updatedConversation);
-        }
-
-        setConversations(updatedConversations);
-        saveConversations(updatedConversations);
-
-        setMessageIsStreaming(false);
     }
   };
 

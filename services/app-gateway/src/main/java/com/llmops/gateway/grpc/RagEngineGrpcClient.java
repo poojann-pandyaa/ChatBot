@@ -48,6 +48,7 @@ public class RagEngineGrpcClient {
 
     private ManagedChannel channel;
     private ReasoningServiceGrpc.ReasoningServiceBlockingStub blockingStub;
+    private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @PostConstruct
     public void init() {
@@ -92,9 +93,20 @@ public class RagEngineGrpcClient {
                             sink.complete();
                             return;
                         }
-                        // Reconstruct the NDJSON line so downstream ChatController logic is unchanged
-                        String json = "{\"type\":\"" + chunk.getType() + "\",\"data\":"
-                                + jsonValue(chunk.getData()) + "}\n";
+                        // Reconstruct the NDJSON line cleanly using Jackson to handle control chars & escaping
+                        com.fasterxml.jackson.databind.node.ObjectNode node = mapper.createObjectNode();
+                        node.put("type", chunk.getType());
+                        String rawData = chunk.getData();
+                        if (rawData != null && (rawData.trim().startsWith("{") || rawData.trim().startsWith("["))) {
+                            try {
+                                node.set("data", mapper.readTree(rawData));
+                            } catch (Exception ex) {
+                                node.put("data", rawData);
+                            }
+                        } else {
+                            node.put("data", rawData);
+                        }
+                        String json = mapper.writeValueAsString(node) + "\n";
                         sink.next(json);
                     }
                     sink.complete();
