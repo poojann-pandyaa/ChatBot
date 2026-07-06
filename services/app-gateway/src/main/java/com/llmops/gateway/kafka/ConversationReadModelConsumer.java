@@ -68,6 +68,16 @@ public class ConversationReadModelConsumer {
                     List<Map<String, String>> existingMsgs = (List<Map<String, String>>) existingData.get("messages");
                     if (existingMsgs != null) {
                         messages.addAll(existingMsgs);
+
+                        // Idempotency check: if this exact (query, answer) pair is already present,
+                        // this is a redelivery — skip to avoid duplicating history.
+                        boolean alreadyApplied = messages.stream().anyMatch(m ->
+                                "user".equals(m.get("role")) && event.query().equals(m.get("content")));
+                        if (alreadyApplied) {
+                            log.info("Idempotency guard: read model for conversation {} already contains this event (offset={}). Skipping.",
+                                    event.conversationId(), offset);
+                            return;
+                        }
                     }
                 } catch (Exception e) {
                     log.warn("Failed to parse existing read model for conversation {}: {}", event.conversationId(), e.getMessage());

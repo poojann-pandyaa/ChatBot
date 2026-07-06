@@ -9,6 +9,7 @@
     docker_registry: "poojan"
     image_tag: "latest"
     redis_password: "SuperSecureRedisPassword123"
+    postgres_password: "SuperSecurePostgresPassword123"
     vault_root_token: "root-token"
     vault_secret_path: "llmops-platform"
     ollama_model: "gemma2:2b"

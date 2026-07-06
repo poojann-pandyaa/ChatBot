@@ -1,15 +1,19 @@
 import os
 import re
+import logging
+import threading
 import torch
 import torch.nn.functional as F
 import numpy as np
+from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoModel, pipeline
 from sentence_transformers import CrossEncoder
 
-app = FastAPI(title="Reasoning RAG ML Service", version="1.0.0")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+log = logging.getLogger("ml-service")
 
 # Prompt and helper constants for Classifier
 CLASSIFIER_PROMPT = """Classify the query into one reasoning type: commonsense, adaptive, or strategic.
@@ -144,7 +148,7 @@ class RerankResponse(BaseModel):
 device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
 pipe_device = device if device != "cpu" else -1
 
-print(f"ML Service starting up. Using device: {device}")
+log.info("ML Service starting up. Using device: %s", device)
 
 # Global model pointers
 classifier_pipeline = None
@@ -152,12 +156,13 @@ embed_tokenizer = None
 embed_model = None
 reranker_model = None
 
-@app.on_event("startup")
-def load_models():
+
+def _load_models():
+    """Load all ML models synchronously. Called once at startup via the lifespan handler."""
     global classifier_pipeline, embed_tokenizer, embed_model, reranker_model
-    
+
     # 1. Load Classifier (Flan-T5)
-    print("Loading google/flan-t5-base...")
+    log.info("Loading google/flan-t5-base...")
     clf_model_name = "google/flan-t5-base"
     clf_model = AutoModelForSeq2SeqLM.from_pretrained(
         clf_model_name, low_cpu_mem_usage=True, torch_dtype=torch.float32
@@ -172,25 +177,24 @@ def load_models():
         max_length=512,
         device=pipe_device,
     )
-    
+
     # 2. Load Embedder (BGE)
-    print("Loading BAAI/bge-base-en-v1.5...")
+    log.info("Loading BAAI/bge-base-en-v1.5...")
     emb_model_name = "BAAI/bge-base-en-v1.5"
     embed_tokenizer = AutoTokenizer.from_pretrained(emb_model_name)
     embed_model = AutoModel.from_pretrained(
         emb_model_name, low_cpu_mem_usage=True, torch_dtype=torch.float32
     ).to(device)
     embed_model.eval()
-    
+
     # 3. Load Reranker (CrossEncoder)
-    print("Loading cross-encoder/ms-marco-MiniLM-L-6-v2...")
+    log.info("Loading cross-encoder/ms-marco-MiniLM-L-6-v2...")
     rerank_model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_model = CrossEncoder(rerank_model_name, device=device)
-    print("All ML models loaded successfully.")
+    log.info("All ML models loaded successfully.")
 
-    # ── Start gRPC server facade (daemon thread — stops when FastAPI stops) ──
+    # Start gRPC server facade as a daemon thread (stops when FastAPI stops)
     grpc_port = int(os.environ.get("GRPC_PORT", "50051"))
-    import threading
     import grpc_server
     grpc_thread = threading.Thread(
         target=grpc_server.serve,
@@ -199,8 +203,19 @@ def load_models():
         name="grpc-server"
     )
     grpc_thread.start()
-    print(f"gRPC facade started on port {grpc_port}")
+    log.info("gRPC facade started on port %s", grpc_port)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern FastAPI lifespan handler — replaces the deprecated @app.on_event pattern."""
+    _load_models()
+    yield
+    # Cleanup on shutdown (models released by GC when daemon thread exits)
+    log.info("ML Service shutting down.")
+
+
+app = FastAPI(title="Reasoning RAG ML Service", version="1.0.0", lifespan=lifespan)
 
 # Fallback helpers
 def _keyword_fallback(query: str) -> Optional[str]:

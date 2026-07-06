@@ -88,6 +88,8 @@
       REDIS_HOST="redis"
       REDIS_PORT="6379"
       REDIS_PASSWORD="{{ redis_password }}"
+      SPRING_DATASOURCE_USERNAME="postgres"
+      SPRING_DATASOURCE_PASSWORD="{{ postgres_password }}"
   register: vault_secret_out
 
 - name: Deploy application microservices (RAG Engine, App Gateway, Frontend)

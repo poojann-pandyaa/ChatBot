@@ -27,7 +27,7 @@ public class ShardDataSourceConfig {
     @Value("${spring.datasource.username:postgres}")
     private String username;
 
-    @Value("${spring.datasource.password:SuperSecurePostgresPassword123}")
+    @Value("${spring.datasource.password}")
     private String password;
 
     @Value("${spring.datasource.driver-class-name:org.postgresql.Driver}")

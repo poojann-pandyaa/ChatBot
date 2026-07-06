@@ -39,7 +39,7 @@ spec:
         - name: SPRING_DATASOURCE_USERNAME
           value: "postgres"
         - name: SPRING_DATASOURCE_PASSWORD
-          value: "SuperSecurePostgresPassword123"
+          value: "{{ postgres_password }}"
         - name: VAULT_ENABLED
           value: "true"
         - name: VAULT_ADDR
