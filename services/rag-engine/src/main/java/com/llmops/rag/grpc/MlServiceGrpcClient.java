@@ -27,15 +27,12 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * gRPC client for the ml-service.
- * <p>
- * Replaces the previous {@link com.llmops.rag.client.MlServiceClient} (WebClient-based)
- * with gRPC blocking stubs executed on a bounded-elastic scheduler so they integrate
- * cleanly with the reactive pipeline without blocking the event loop.
- * </p>
- * <p>
- * The same fallback logic from the WebClient version is preserved verbatim so
- * graceful degradation behaviour is unchanged.
- * </p>
+ *
+ * <p>Provides three operations — classify, embed, and rerank — using blocking stubs
+ * offloaded to a boundedElastic scheduler so they do not block the reactive event loop.</p>
+ *
+ * <p>Each method has a circuit breaker + retry, with a keyword-heuristic fallback
+ * for classify and zero-vector/zero-score fallbacks for embed/rerank.</p>
  */
 @Service("mlServiceGrpcClient")
 public class MlServiceGrpcClient {
@@ -120,10 +117,10 @@ public class MlServiceGrpcClient {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    // ─── Fallbacks (identical logic to MlServiceClient REST version) ─────────
+    // ─── Fallbacks ────────────────────────────────────────────────────────────
 
     public Mono<Map<String, Object>> fallbackClassify(String query, Throwable t) {
-        log.warn("gRPC Classification fallback triggered: {}", t.getMessage());
+        log.warn("Classification fallback triggered: {}", t.getMessage());
         String keywordType = keywordFallback(query);
         return Mono.just(Map.of(
                 "intent", "factual",
@@ -136,16 +133,16 @@ public class MlServiceGrpcClient {
     }
 
     public Mono<List<Double>> fallbackEmbed(String text, Throwable t) {
-        log.warn("gRPC Embedding fallback triggered: {}", t.getMessage());
+        log.warn("Embedding fallback triggered: {}", t.getMessage());
         return Mono.just(Collections.nCopies(768, 0.0));
     }
 
     public Mono<List<Double>> fallbackRerank(String query, List<String> documents, Throwable t) {
-        log.warn("gRPC Reranking fallback triggered: {}", t.getMessage());
+        log.warn("Reranking fallback triggered: {}", t.getMessage());
         return Mono.just(Collections.nCopies(documents.size(), 0.0));
     }
 
-    // ─── Keyword fallback helper (duplicated from MlServiceClient) ────────────
+    // ─── Keyword fallback helper ──────────────────────────────────────────────
 
     private String keywordFallback(String query) {
         String q = query.toLowerCase().trim();

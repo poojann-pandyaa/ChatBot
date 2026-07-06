@@ -5,6 +5,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
 
+/**
+ * WebClient beans for services that the rag-engine communicates with via REST:
+ * Qdrant (vector search), Elasticsearch (BM25 search), and Ollama (LLM generation).
+ *
+ * <p>Note: ml-service communication uses gRPC (see {@link com.llmops.rag.grpc.MlServiceGrpcClient}).
+ * No WebClient bean for ml-service is registered here.</p>
+ */
 @Configuration
 public class WebClientConfig {
 
@@ -13,9 +20,6 @@ public class WebClientConfig {
 
     @Value("${services.elasticsearch.url}")
     private String elasticsearchUrl;
-
-    @Value("${services.ml-service.url}")
-    private String mlServiceUrl;
 
     @Value("${services.ollama.url}")
     private String ollamaUrl;
@@ -28,11 +32,6 @@ public class WebClientConfig {
     @Bean
     public WebClient elasticsearchWebClient(WebClient.Builder builder) {
         return builder.baseUrl(elasticsearchUrl).build();
-    }
-
-    @Bean
-    public WebClient mlServiceWebClient(WebClient.Builder builder) {
-        return builder.baseUrl(mlServiceUrl).build();
     }
 
     @Bean

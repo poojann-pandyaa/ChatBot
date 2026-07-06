@@ -1,8 +1,8 @@
 package com.llmops.rag.service;
 
 import com.llmops.rag.client.ElasticsearchClient;
-import com.llmops.rag.client.MlServiceClient;
 import com.llmops.rag.client.QdrantClient;
+import com.llmops.rag.grpc.MlServiceGrpcClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -18,13 +18,13 @@ import static org.mockito.Mockito.when;
 public class RetrieverServiceTest {
 
     private RetrieverService retrieverService;
-    private MlServiceClient mlServiceClient;
+    private MlServiceGrpcClient mlServiceClient;
     private QdrantClient qdrantClient;
     private ElasticsearchClient elasticsearchClient;
 
     @BeforeEach
     public void setup() {
-        mlServiceClient = Mockito.mock(MlServiceClient.class);
+        mlServiceClient = Mockito.mock(MlServiceGrpcClient.class);
         qdrantClient = Mockito.mock(QdrantClient.class);
         elasticsearchClient = Mockito.mock(ElasticsearchClient.class);
         retrieverService = new RetrieverService(mlServiceClient, qdrantClient, elasticsearchClient);

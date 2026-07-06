@@ -50,7 +50,7 @@ public class ChatControllerTest {
         when(listOps.range(anyString(), anyLong(), anyLong())).thenReturn(Flux.fromIterable(List.of("user:previous prompt", "assistant:previous response")));
         when(listOps.rightPush(anyString(), anyString())).thenReturn(Mono.just(1L));
 
-        when(conversationRepository.existsById(anyString())).thenReturn(false);
+
 
         ChatController controller = new ChatController(
                 redisTemplate,

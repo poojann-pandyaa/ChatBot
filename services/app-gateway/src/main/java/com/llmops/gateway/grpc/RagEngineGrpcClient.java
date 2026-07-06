@@ -1,5 +1,7 @@
 package com.llmops.gateway.grpc;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.llmops.proto.ChatHistoryEntry;
 import com.llmops.proto.ReasoningChatChunk;
 import com.llmops.proto.ReasoningChatRequest;
@@ -28,12 +30,10 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * gRPC client for the rag-engine ReasoningService.
- * <p>
- * Replaces the WebClient-based {@link com.llmops.gateway.client.RagEngineClient}
- * with gRPC server-streaming and unary calls. Blocking iterator for the
- * server-streaming RPC is executed on a boundedElastic scheduler and converted
- * to a reactive {@link Flux}.
- * </p>
+ *
+ * <p>Handles both server-streaming (stream=true) and unary (stream=false) chat RPCs.
+ * Blocking gRPC stubs are offloaded to a boundedElastic scheduler to avoid blocking
+ * the reactive event loop.</p>
  */
 @Service
 public class RagEngineGrpcClient {
@@ -48,7 +48,7 @@ public class RagEngineGrpcClient {
 
     private ManagedChannel channel;
     private ReasoningServiceGrpc.ReasoningServiceBlockingStub blockingStub;
-    private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @PostConstruct
     public void init() {
@@ -69,55 +69,50 @@ public class RagEngineGrpcClient {
         }
     }
 
-    // ─── Server-streaming (stream=true) ─────────────────────────────────────
+    // ─── Server-streaming RPC (stream=true) ──────────────────────────────────
 
     /**
-     * Calls the server-streaming StreamChat RPC and re-emits each chunk as a
-     * JSON string equivalent to the original NDJSON frames:
-     * <pre>{"type":"token","data":"..."}</pre>
-     * <pre>{"type":"trace","data":{...}}</pre>
+     * Calls the server-streaming StreamChat RPC.
+     * Each chunk is re-emitted as a JSON string: {@code {"type":"token","data":"..."}}
+     * or {@code {"type":"trace","data":{...}}}.
      */
     @CircuitBreaker(name = "ragEngineClient", fallbackMethod = "fallbackStreamChat")
     @Retry(name = "ragEngineClient")
     public Flux<String> streamChat(ChatRequest request) {
         ReasoningChatRequest grpcRequest = toGrpcRequest(request);
 
-        return Flux.create(sink -> {
-            // Run blocking iterator on a separate thread
-            Schedulers.boundedElastic().schedule(() -> {
-                try {
-                    Iterator<ReasoningChatChunk> iter = blockingStub.streamChat(grpcRequest);
-                    while (iter.hasNext()) {
-                        ReasoningChatChunk chunk = iter.next();
-                        if ("done".equals(chunk.getType())) {
-                            sink.complete();
-                            return;
-                        }
-                        // Reconstruct the NDJSON line cleanly using Jackson to handle control chars & escaping
-                        com.fasterxml.jackson.databind.node.ObjectNode node = mapper.createObjectNode();
-                        node.put("type", chunk.getType());
-                        String rawData = chunk.getData();
-                        if (rawData != null && (rawData.trim().startsWith("{") || rawData.trim().startsWith("["))) {
-                            try {
-                                node.set("data", mapper.readTree(rawData));
-                            } catch (Exception ex) {
-                                node.put("data", rawData);
-                            }
-                        } else {
+        return Flux.create(sink -> Schedulers.boundedElastic().schedule(() -> {
+            try {
+                Iterator<ReasoningChatChunk> iter = blockingStub.streamChat(grpcRequest);
+                while (iter.hasNext()) {
+                    ReasoningChatChunk chunk = iter.next();
+                    if ("done".equals(chunk.getType())) {
+                        sink.complete();
+                        return;
+                    }
+                    // Use Jackson to safely handle control chars and escaping
+                    ObjectNode node = mapper.createObjectNode();
+                    node.put("type", chunk.getType());
+                    String rawData = chunk.getData();
+                    if (rawData != null && (rawData.trim().startsWith("{") || rawData.trim().startsWith("["))) {
+                        try {
+                            node.set("data", mapper.readTree(rawData));
+                        } catch (Exception ex) {
                             node.put("data", rawData);
                         }
-                        String json = mapper.writeValueAsString(node) + "\n";
-                        sink.next(json);
+                    } else {
+                        node.put("data", rawData);
                     }
-                    sink.complete();
-                } catch (Exception e) {
-                    sink.error(e);
+                    sink.next(mapper.writeValueAsString(node) + "\n");
                 }
-            });
-        });
+                sink.complete();
+            } catch (Exception e) {
+                sink.error(e);
+            }
+        }));
     }
 
-    // ─── Unary (stream=false) ────────────────────────────────────────────────
+    // ─── Unary RPC (stream=false) ─────────────────────────────────────────────
 
     @CircuitBreaker(name = "ragEngineClient", fallbackMethod = "fallbackChat")
     @Retry(name = "ragEngineClient")
@@ -144,7 +139,7 @@ public class RagEngineGrpcClient {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    // ─── Fallbacks (identical semantics to the REST-based RagEngineClient) ───
+    // ─── Fallbacks ───────────────────────────────────────────────────────────
 
     public Flux<String> fallbackStreamChat(ChatRequest request, Throwable t) {
         log.warn("gRPC streamChat fallback triggered: {}", t.getMessage());
@@ -161,7 +156,7 @@ public class RagEngineGrpcClient {
         ));
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
+    // ─── Helper ──────────────────────────────────────────────────────────────
 
     private ReasoningChatRequest toGrpcRequest(ChatRequest request) {
         ReasoningChatRequest.Builder builder = ReasoningChatRequest.newBuilder()
@@ -178,17 +173,5 @@ public class RagEngineGrpcClient {
             ));
         }
         return builder.build();
-    }
-
-    /**
-     * Wraps a value as a JSON string literal if it doesn't look like JSON,
-     * otherwise passes it through (for trace objects serialized by rag-engine).
-     */
-    private String jsonValue(String data) {
-        if (data == null || data.isEmpty()) return "\"\"";
-        String trimmed = data.trim();
-        if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed;
-        // Escape quotes for string literal
-        return "\"" + trimmed.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 }

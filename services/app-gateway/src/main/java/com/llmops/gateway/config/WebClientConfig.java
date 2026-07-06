@@ -1,20 +1,4 @@
 package com.llmops.gateway.config;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.web.reactive.function.client.WebClient;
-
-@Configuration
-public class WebClientConfig {
-
-    @Value("${services.rag-engine.url}")
-    private String ragEngineUrl;
-
-    @Bean
-    public WebClient ragEngineWebClient(WebClient.Builder builder) {
-        return builder
-                .baseUrl(ragEngineUrl)
-                .build();
-    }
-}
+// ragEngineWebClient bean removed — all RAG Engine communication
+// now goes through gRPC (RagEngineGrpcClient). No REST WebClient needed.

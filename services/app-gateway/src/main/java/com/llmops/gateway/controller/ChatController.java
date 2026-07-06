@@ -3,11 +3,12 @@ package com.llmops.gateway.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmops.gateway.grpc.RagEngineGrpcClient;
-import com.llmops.gateway.entity.Conversation;
 import com.llmops.gateway.model.ChatMessage;
 import com.llmops.gateway.model.ChatRequest;
 import com.llmops.gateway.model.UserChatRequest;
 import com.llmops.gateway.repository.ConversationRepository;
+import com.llmops.gateway.service.ConversationCommandService;
+import com.llmops.gateway.service.ConversationQueryService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
@@ -24,7 +25,6 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -36,8 +36,8 @@ public class ChatController {
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ConversationRepository conversationRepository;
     private final RagEngineGrpcClient ragEngineClient;
-    private final com.llmops.gateway.service.ConversationCommandService conversationCommandService;
-    private final com.llmops.gateway.service.ConversationQueryService conversationQueryService;
+    private final ConversationCommandService conversationCommandService;
+    private final ConversationQueryService conversationQueryService;
     private final Counter requestCounter;
     private final PrometheusMeterRegistry prometheusRegistry;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -47,8 +47,8 @@ public class ChatController {
             ReactiveRedisTemplate<String, String> redisTemplate,
             ConversationRepository conversationRepository,
             RagEngineGrpcClient ragEngineClient,
-            com.llmops.gateway.service.ConversationCommandService conversationCommandService,
-            com.llmops.gateway.service.ConversationQueryService conversationQueryService,
+            ConversationCommandService conversationCommandService,
+            ConversationQueryService conversationQueryService,
             MeterRegistry meterRegistry,
             PrometheusMeterRegistry prometheusRegistry) {
         this.redisTemplate = redisTemplate;
@@ -74,7 +74,7 @@ public class ChatController {
                     // 2. Log user message to Redis history
                     Mono<Long> redisPushUser = redisTemplate.opsForList().rightPush(redisKey, "user:" + request.prompt());
 
-                    // Format message history
+                    // Parse stored "role:content" strings into ChatMessage objects
                     List<ChatMessage> historyMsgs = history.stream().map(msg -> {
                         int colonIndex = msg.indexOf(':');
                         if (colonIndex != -1) {
@@ -84,7 +84,7 @@ public class ChatController {
                         }
                     }).toList();
 
-                    // Keep last 10 messages for context
+                    // Keep last 10 messages for context window
                     int start = Math.max(0, historyMsgs.size() - 10);
                     List<ChatMessage> history10 = historyMsgs.subList(start, historyMsgs.size());
 
@@ -96,66 +96,74 @@ public class ChatController {
                     );
 
                     if (request.stream()) {
-                        StringBuilder accumulatedAnswer = new StringBuilder();
-
-                        Flux<JsonNode> streamRes = ragEngineClient.streamChat(clientRequest)
-                                .map(chunk -> {
-                                    try {
-                                        JsonNode node = mapper.readTree(chunk);
-                                        if (node.has("type") && "token".equals(node.get("type").asText())) {
-                                            accumulatedAnswer.append(node.get("data").asText());
-                                        }
-                                        return node;
-                                    } catch (Exception e) {
-                                        try {
-                                            return mapper.readTree(chunk.trim());
-                                        } catch (Exception ex) {
-                                            com.fasterxml.jackson.databind.node.ObjectNode errNode = mapper.createObjectNode();
-                                            errNode.put("type", "error");
-                                            errNode.put("data", e.getMessage());
-                                            return errNode;
-                                        }
-                                    }
-                                })
-                                .doFinally(signalType -> {
-                                    if (signalType == SignalType.ON_COMPLETE) {
-                                        String finalAnswer = accumulatedAnswer.toString();
-                                        redisTemplate.opsForList().rightPush(redisKey, "assistant:" + finalAnswer)
-                                                .then(Mono.fromRunnable(() -> {
-                                                    String title = request.prompt().length() > 50
-                                                            ? request.prompt().substring(0, 50) + "..."
-                                                            : request.prompt();
-                                                    conversationCommandService.saveConversationAndEvent(
-                                                            request.conversationId(), title, request.userId(),
-                                                            request.prompt(), finalAnswer, "unknown");
-                                                }).subscribeOn(Schedulers.boundedElastic()))
-                                                .subscribe();
-                                    }
-                                });
-
-                        return redisPushUser.then(Mono.just(ResponseEntity.ok()
-                                .contentType(MediaType.valueOf("application/x-ndjson"))
-                                .body(streamRes)));
+                        return redisPushUser.then(handleStreamResponse(request, clientRequest, redisKey));
                     } else {
-                        return redisPushUser.then(
-                                ragEngineClient.chat(clientRequest)
-                                        .flatMap(res -> {
-                                            String answer = (String) res.getOrDefault("answer", "");
-                                            String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
-                                            return redisTemplate.opsForList().rightPush(redisKey, "assistant:" + answer)
-                                                    .then(Mono.fromRunnable(() -> {
-                                                        String title = request.prompt().length() > 50
-                                                                ? request.prompt().substring(0, 50) + "..."
-                                                                : request.prompt();
-                                                        conversationCommandService.saveConversationAndEvent(
-                                                                request.conversationId(), title, request.userId(),
-                                                                request.prompt(), answer, reasoningType);
-                                                    }).subscribeOn(Schedulers.boundedElastic()))
-                                                    .thenReturn(ResponseEntity.ok().body(res));
-                                        })
-                        );
+                        return redisPushUser.then(handleNonStreamResponse(request, clientRequest, redisKey));
                     }
                 });
+    }
+
+    private Mono<ResponseEntity<?>> handleStreamResponse(
+            UserChatRequest request, ChatRequest clientRequest, String redisKey) {
+
+        StringBuilder accumulatedAnswer = new StringBuilder();
+        String title = buildTitle(request.prompt());
+
+        Flux<JsonNode> streamRes = ragEngineClient.streamChat(clientRequest)
+                .map(chunk -> {
+                    try {
+                        JsonNode node = mapper.readTree(chunk);
+                        if (node.has("type") && "token".equals(node.get("type").asText())) {
+                            accumulatedAnswer.append(node.get("data").asText());
+                        }
+                        return node;
+                    } catch (Exception e) {
+                        com.fasterxml.jackson.databind.node.ObjectNode errNode = mapper.createObjectNode();
+                        errNode.put("type", "error");
+                        errNode.put("data", e.getMessage());
+                        return (JsonNode) errNode;
+                    }
+                })
+                .doFinally(signalType -> {
+                    if (signalType == SignalType.ON_COMPLETE) {
+                        String finalAnswer = accumulatedAnswer.toString();
+                        redisTemplate.opsForList().rightPush(redisKey, "assistant:" + finalAnswer)
+                                .then(Mono.fromRunnable(() ->
+                                        conversationCommandService.saveConversationAndEvent(
+                                                request.conversationId(), title, request.userId(),
+                                                request.prompt(), finalAnswer, "unknown")
+                                ).subscribeOn(Schedulers.boundedElastic()))
+                                .subscribe();
+                    }
+                });
+
+        return Mono.just(ResponseEntity.ok()
+                .contentType(MediaType.valueOf("application/x-ndjson"))
+                .body(streamRes));
+    }
+
+    private Mono<ResponseEntity<?>> handleNonStreamResponse(
+            UserChatRequest request, ChatRequest clientRequest, String redisKey) {
+
+        String title = buildTitle(request.prompt());
+
+        return ragEngineClient.chat(clientRequest)
+                .flatMap(res -> {
+                    String answer = (String) res.getOrDefault("answer", "");
+                    String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
+                    return redisTemplate.opsForList().rightPush(redisKey, "assistant:" + answer)
+                            .then(Mono.fromRunnable(() ->
+                                    conversationCommandService.saveConversationAndEvent(
+                                            request.conversationId(), title, request.userId(),
+                                            request.prompt(), answer, reasoningType)
+                            ).subscribeOn(Schedulers.boundedElastic()))
+                            .thenReturn(ResponseEntity.ok().body(res));
+                });
+    }
+
+    /** Truncates the prompt to produce a concise conversation title. */
+    private String buildTitle(String prompt) {
+        return prompt.length() > 50 ? prompt.substring(0, 50) + "..." : prompt;
     }
 
     @GetMapping("/api/history/{conversationId}")
@@ -181,7 +189,6 @@ public class ChatController {
 
         Mono<Boolean> dbPing = Mono.fromCallable(() -> {
             try {
-                // Confirm database connectivity
                 return conversationRepository.count() >= 0;
             } catch (Exception e) {
                 return false;

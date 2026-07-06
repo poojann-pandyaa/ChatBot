@@ -12,7 +12,9 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class GeneratorService {
@@ -171,48 +173,8 @@ public class GeneratorService {
                 });
     }
 
-    private double scoreResponse(String response) {
-        String[] tokens = response.split("\\s+");
-        if (tokens.length == 0) {
-            return 0.0;
-        }
-        long uniqueCount = Arrays.stream(tokens).distinct().count();
-        return (double) uniqueCount / tokens.length;
-    }
-
-    public Mono<String> generateWithConsistency(String prompt, int n) {
-        log.info("Applying self-consistency decoding (n={})", n);
-        if (n <= 1) {
-            return ollamaClient.generate(prompt);
-        }
-
-        // Sequential invocation
-        List<Mono<String>> calls = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            calls.add(ollamaClient.generate(prompt));
-        }
-
-        return Mono.zip(calls, results -> {
-            String bestResponse = "";
-            double maxScore = -1.0;
-            for (Object resObj : results) {
-                String response = (String) resObj;
-                double score = scoreResponse(response);
-                if (score > maxScore) {
-                    maxScore = score;
-                    bestResponse = response;
-                }
-            }
-            return bestResponse;
-        });
-    }
-
     public Mono<String> generate(String prompt, String reasoningType) {
-        if ("strategic".equalsIgnoreCase(reasoningType)) {
-            return generateWithConsistency(prompt, 1);
-        } else {
-            return ollamaClient.generate(prompt);
-        }
+        return ollamaClient.generate(prompt);
     }
 
     public Flux<String> generateStream(String prompt) {

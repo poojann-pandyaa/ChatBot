@@ -14,11 +14,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 
 /**
- * Service to handle commands (writes) for conversations.
+ * Handles write operations for conversations.
  *
- * <p>Implements the Outbox pattern: both the conversation record and the outbox
- * event are saved to PostgreSQL within a single database transaction, ensuring
- * consistency.</p>
+ * <p>Implements the Transactional Outbox pattern: both the conversation record
+ * and the outbox event are saved within a single database transaction,
+ * guaranteeing consistency between the DB and Kafka.</p>
  */
 @Service
 public class ConversationCommandService {
@@ -42,11 +42,8 @@ public class ConversationCommandService {
     }
 
     /**
-     * Atomically saves or updates the Conversation, and inserts an Outbox event
-     * to publish to Kafka.
-     *
-     * <p>Runs inside a write transaction. If either operation fails, the entire
-     * transaction is rolled back, preventing orphaned messages or missing database state.</p>
+     * Atomically saves/updates the Conversation and inserts an Outbox event for Kafka publishing.
+     * Both writes happen in one transaction — failure in either rolls back both.
      */
     @Transactional
     public void saveConversationAndEvent(String conversationId, String title, String userId,
@@ -55,17 +52,16 @@ public class ConversationCommandService {
         log.info("Saving conversation {} on shard key {} and scheduling outbox event in transaction...",
                 conversationId, userId);
 
-        // 1. Save or update the Conversation metadata
+        // Upsert the conversation record
         Conversation conversation = conversationRepository.findById(conversationId)
+                .map(existing -> {
+                    existing.setTitle(title);
+                    return existing;
+                })
                 .orElseGet(() -> new Conversation(conversationId, LocalDateTime.now(), title, userId));
-        
-        // If it exists, update title
-        if (conversationRepository.existsById(conversationId)) {
-            conversation.setTitle(title);
-        }
         conversationRepository.save(conversation);
 
-        // 2. Serialize event payload to JSON
+        // Serialize and write the outbox event
         ChatCompletedEvent event = ChatCompletedEvent.of(conversationId, userId, query, answer, reasoningType);
         String payloadJson;
         try {
@@ -75,10 +71,7 @@ public class ConversationCommandService {
             throw new RuntimeException("Serialization failure during outbox save", e);
         }
 
-        // 3. Write outbox event
-        OutboxEvent outboxEvent = new OutboxEvent(conversationId, "chat-completed", payloadJson);
-        outboxEventRepository.save(outboxEvent);
-
+        outboxEventRepository.save(new OutboxEvent(conversationId, "chat-completed", payloadJson));
         log.info("Transaction commit succeeded for conversation {} and outbox event.", conversationId);
     }
 }

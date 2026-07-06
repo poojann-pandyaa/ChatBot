@@ -51,7 +51,6 @@ public class ConversationCommandServiceTest {
         String reasoningType = "adaptive";
 
         when(conversationRepository.findById(convId)).thenReturn(Optional.empty());
-        when(conversationRepository.existsById(convId)).thenReturn(false);
 
         // Act
         conversationCommandService.saveConversationAndEvent(convId, title, userId, query, answer, reasoningType);
