@@ -104,8 +104,7 @@ public class GeneratorService {
                 "1. Base your answer on the Retrieved Evidence AND the conversation history.\n" +
                 "2. If the user is asking a follow-up question about the previous conversation, prioritize the conversation history. You may ignore the retrieved evidence if it is not relevant to the follow-up.\n" +
                 "3. Do not invent facts that contradict the sources or history.\n" +
-                "4. If neither the sources nor the history contain enough information to answer, say exactly: " +
-                "\"The retrieved sources do not contain enough information to answer this question.\" and stop.\n" +
+                "4. If the retrieved sources do not contain enough information to answer the question, you should answer it using your general knowledge as a senior software engineer. In this case, begin your response by stating that you are answering using general knowledge because the retrieved sources were not relevant or sufficient.\n" +
                 "5. You MAY explain, expand, and structure information from the sources -- " +
                 "do not copy-paste raw source text verbatim.\n" +
                 "6. Include code blocks using markdown (```language) if the sources contain code " +
