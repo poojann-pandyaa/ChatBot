@@ -45,22 +45,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Phase 7: Postgres read replica ─────────────────────────────────────────
-  postgres-replica:
-    image: bitnami/postgresql:15
-    container_name: postgres-replica-dev
-    ports:
-      - "5433:5432"
-    environment:
-      POSTGRESQL_REPLICATION_MODE: slave
-      POSTGRESQL_REPLICATION_USER: replicator
-      POSTGRESQL_REPLICATION_PASSWORD: ReplicatorPassword123
-      POSTGRESQL_MASTER_HOST: postgres
-      POSTGRESQL_MASTER_PORT_NUMBER: 5432
-      POSTGRESQL_PASSWORD: SuperSecurePostgresPassword123
-    depends_on:
-      postgres:
-        condition: service_healthy
+
 
   qdrant:
     image: qdrant/qdrant:v1.8.0
@@ -139,8 +124,8 @@ services:
 
   rag-engine:
     build:
-      context: ./services/rag-engine
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/rag-engine/Dockerfile
     container_name: rag-engine-dev
     ports:
       - "8000:8000"   # HTTP (kept for health/metrics)
@@ -172,8 +157,8 @@ services:
 
   app-gateway:
     build:
-      context: ./services/app-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/app-gateway/Dockerfile
     container_name: app-gateway-dev
     ports:
       - "8080:8080"
@@ -185,6 +170,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=SuperSecureRedisPassword123
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/chatbot_db
+      - REPLICA_DATASOURCE_URL=jdbc:postgresql://postgres:5432/chatbot_db
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=SuperSecurePostgresPassword123
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:29092

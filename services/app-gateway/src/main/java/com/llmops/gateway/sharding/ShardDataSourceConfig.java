@@ -33,13 +33,13 @@ public class ShardDataSourceConfig {
     @Value("${spring.datasource.driver-class-name:org.postgresql.Driver}")
     private String driverClassName;
 
-    // Default replica to primary if not specified (graceful fallback)
-    @Value("${replica.datasource.url:jdbc:postgresql://localhost:5433/chatbot_db}")
+    @Value("${REPLICA_DATASOURCE_URL:jdbc:postgresql://localhost:5432/chatbot_db}")
     private String replicaUrl;
 
     @Bean
     @Primary
     public DataSource dataSource() {
+        initializeSchemas();
         log.info("Initializing Sharded + Replica routing DataSource...");
 
         // 1. Instantiating 4 physical data sources (2 shards x 2 endpoints)
@@ -68,6 +68,49 @@ public class ShardDataSourceConfig {
 
         log.info("Routing DataSource initialized successfully with 4 targets.");
         return routingDataSource;
+    }
+
+    private void initializeSchemas() {
+        log.info("Creating shard schemas and tables if they do not exist on the primary database...");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(primaryUrl, username, password);
+             java.sql.Statement stmt = conn.createStatement()) {
+            
+            // Create schemas
+            stmt.execute("CREATE SCHEMA IF NOT EXISTS shard_0");
+            stmt.execute("CREATE SCHEMA IF NOT EXISTS shard_1");
+            
+            // Create tables in shard_0
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.conversations (" +
+                    "id VARCHAR(255) PRIMARY KEY, " +
+                    "created_at TIMESTAMP, " +
+                    "title VARCHAR(255), " +
+                    "user_id VARCHAR(255))");
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.outbox_events (" +
+                    "id BIGSERIAL PRIMARY KEY, " +
+                    "aggregate_id VARCHAR(255) NOT NULL, " +
+                    "event_type VARCHAR(255) NOT NULL, " +
+                    "payload TEXT NOT NULL, " +
+                    "created_at TIMESTAMP NOT NULL, " +
+                    "published BOOLEAN NOT NULL)");
+
+            // Create tables in shard_1
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.conversations (" +
+                    "id VARCHAR(255) PRIMARY KEY, " +
+                    "created_at TIMESTAMP, " +
+                    "title VARCHAR(255), " +
+                    "user_id VARCHAR(255))");
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.outbox_events (" +
+                    "id BIGSERIAL PRIMARY KEY, " +
+                    "aggregate_id VARCHAR(255) NOT NULL, " +
+                    "event_type VARCHAR(255) NOT NULL, " +
+                    "payload TEXT NOT NULL, " +
+                    "created_at TIMESTAMP NOT NULL, " +
+                    "published BOOLEAN NOT NULL)");
+
+            log.info("Shard schemas and tables (conversations, outbox_events) initialized successfully on primary.");
+        } catch (Exception e) {
+            log.error("Failed to initialize shard schemas and tables on primary: {}", e.getMessage());
+        }
     }
 
     private String getShardUrl(String baseUrl, String schema) {
