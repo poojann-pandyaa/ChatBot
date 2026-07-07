@@ -174,7 +174,7 @@ if __name__ == "__main__":
             print("\nStep 1: Rebuilding dataset (accepted answers only) ...")
             subprocess.run([
                 sys.executable,
-                "src/ingestion/prepare_finetune.py",
+                "training/ingestion/prepare_finetune.py",
                 "--input",  "data/processed_dataset.jsonl",
                 "--output", data_src,
                 "--accepted-only",

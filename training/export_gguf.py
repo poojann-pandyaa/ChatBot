@@ -32,8 +32,8 @@ def fuse_and_export(adapter_path, base_model, output_dir, quant_type="Q4_K_M"):
         ]
         subprocess.run(cmd, check=True)
         print(f"Model successfully fused and saved to {fused_model_path}")
-    except ImportError:
-        print("mlx_lm not available, using Hugging Face PEFT fallback...")
+    except (ImportError, subprocess.CalledProcessError) as e:
+        print(f"mlx_lm fuse failed or not available ({e}), using Hugging Face PEFT fallback...")
         try:
             from peft import PeftModel
             from transformers import AutoModelForCausalLM, AutoTokenizer

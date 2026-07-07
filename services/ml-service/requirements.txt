@@ -6,6 +6,6 @@ transformers==4.40.0
 sentence-transformers==2.7.0
 numpy==1.26.4
 # gRPC facade (Phase 3)
-grpcio==1.65.0
+grpcio==1.66.2
 grpcio-tools==1.65.0
 protobuf==5.27.2

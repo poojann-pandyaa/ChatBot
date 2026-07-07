@@ -1,4 +1,7 @@
 import os
+# Set before any torch/transformers import so MPS unsupported ops transparently
+# fall back to CPU instead of raising NotImplementedError (e.g. aten::isin).
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import re
 import logging
 import threading
@@ -7,7 +10,8 @@ import torch.nn.functional as F
 import numpy as np
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoModel, pipeline
 from sentence_transformers import CrossEncoder
@@ -156,10 +160,18 @@ embed_tokenizer = None
 embed_model = None
 reranker_model = None
 
+# Global loading status — checked by endpoint guards so gRPC facade can also use them
+_models_ready = False
+_models_load_error = None
 
-def _load_models():
-    """Load all ML models synchronously. Called once at startup via the lifespan handler."""
-    global classifier_pipeline, embed_tokenizer, embed_model, reranker_model
+
+def _load_models(app_state=None):
+    """Load all ML models synchronously. Called once at startup via the lifespan handler.
+
+    ``app_state`` is an optional FastAPI ``app.state`` object passed from the lifespan
+    handler so we can propagate gRPC startup status into /health.
+    """
+    global classifier_pipeline, embed_tokenizer, embed_model, reranker_model, _models_ready
 
     # 1. Load Classifier (Flan-T5)
     log.info("Loading google/flan-t5-base...")
@@ -192,13 +204,14 @@ def _load_models():
     rerank_model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_model = CrossEncoder(rerank_model_name, device=device)
     log.info("All ML models loaded successfully.")
+    _models_ready = True
 
     # Start gRPC server facade as a daemon thread (stops when FastAPI stops)
     grpc_port = int(os.environ.get("GRPC_PORT", "50051"))
     import grpc_server
     grpc_thread = threading.Thread(
         target=grpc_server.serve,
-        args=(classify_endpoint, embed_endpoint, rerank_endpoint, grpc_port),
+        args=(classify_endpoint, embed_endpoint, rerank_endpoint, grpc_port, app_state),
         daemon=True,
         name="grpc-server"
     )
@@ -209,9 +222,21 @@ def _load_models():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern FastAPI lifespan handler — replaces the deprecated @app.on_event pattern."""
-    _load_models()
+    global _models_load_error
+    app.state.models_loaded = False
+    app.state.load_error = None
+    app.state.grpc_running = False
+    app.state.grpc_error = None
+    try:
+        _load_models(app_state=app.state)
+        app.state.models_loaded = True
+    except Exception as e:
+        log.error("Model loading failed: %s", e, exc_info=True)
+        _models_load_error = str(e)
+        app.state.load_error = str(e)
+        # Do NOT re-raise — keep the process alive so /health can report the failure
+        # to orchestrators (k8s readiness probe, docker-compose healthcheck).
     yield
-    # Cleanup on shutdown (models released by GC when daemon thread exits)
     log.info("ML Service shutting down.")
 
 
@@ -255,6 +280,8 @@ def _generate_fallback_subquestions(query: str, reasoning_type: str) -> list:
 
 @app.post("/classify", response_model=ClassifyResponse)
 def classify_endpoint(request: ClassifyRequest):
+    if not _models_ready:
+        raise HTTPException(status_code=503, detail="Models not loaded")
     try:
         prompt = CLASSIFIER_PROMPT.format(query=request.query)
         outputs = classifier_pipeline(prompt)
@@ -318,6 +345,8 @@ def classify_endpoint(request: ClassifyRequest):
 
 @app.post("/embed", response_model=EmbedResponse)
 def embed_endpoint(request: EmbedRequest):
+    if not _models_ready:
+        raise HTTPException(status_code=503, detail="Models not loaded")
     try:
         encoded = embed_tokenizer(
             [request.text],
@@ -339,6 +368,8 @@ def embed_endpoint(request: EmbedRequest):
 
 @app.post("/rerank", response_model=RerankResponse)
 def rerank_endpoint(request: RerankRequest):
+    if not _models_ready:
+        raise HTTPException(status_code=503, detail="Models not loaded")
     try:
         if not request.documents:
             return {"scores": []}
@@ -351,5 +382,20 @@ def rerank_endpoint(request: RerankRequest):
 
 
 @app.get("/health")
-def health():
-    return {"status": "healthy"}
+async def health(http_request: Request):
+    """Returns service health including model-load status and gRPC facade status.
+
+    HTTP 200 → models loaded (gRPC may still be down, check grpc_running field).
+    HTTP 503 → models not loaded; service is starting or failed to start.
+    """
+    loaded = getattr(http_request.app.state, "models_loaded", False)
+    grpc_ok = getattr(http_request.app.state, "grpc_running", False)
+    body = {
+        "status": "healthy" if loaded else "unhealthy",
+        "grpc_running": grpc_ok,
+    }
+    if not loaded:
+        body["error"] = getattr(http_request.app.state, "load_error", None) or "models not loaded"
+    if not grpc_ok:
+        body["grpc_error"] = getattr(http_request.app.state, "grpc_error", None) or "gRPC not started"
+    return JSONResponse(status_code=200 if loaded else 503, content=body)

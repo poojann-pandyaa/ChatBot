@@ -107,16 +107,32 @@ class MlServiceServicer(ml_service_pb2_grpc.MlServiceServicer):
             return ml_service_pb2.RerankResponse()
 
 
-def serve(classify_fn, embed_fn, rerank_fn, port: int = 50051):
+def serve(classify_fn, embed_fn, rerank_fn, port: int = 50051, app_state=None):
     """
     Start the gRPC server on the given port.
     This function blocks the calling thread until the server is stopped.
     Call it from a daemon thread in app.py.
+
+    ``app_state`` is an optional FastAPI ``app.state`` object.  When provided,
+    the function writes ``grpc_running`` (bool) and ``grpc_error`` (str|None) so
+    that the /health endpoint can expose gRPC status to orchestrators.
     """
-    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=4))
-    servicer = MlServiceServicer(classify_fn, embed_fn, rerank_fn)
-    ml_service_pb2_grpc.add_MlServiceServicer_to_server(servicer, server)
-    server.add_insecure_port(f"[::]:{port}")
-    server.start()
-    logger.info("gRPC server started on port %d", port)
-    server.wait_for_termination()
+    try:
+        server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=4))
+        servicer = MlServiceServicer(classify_fn, embed_fn, rerank_fn)
+        ml_service_pb2_grpc.add_MlServiceServicer_to_server(servicer, server)
+        actual_port = server.add_insecure_port(f"[::]:{port}")
+        if actual_port == 0:
+            raise RuntimeError(f"Failed to bind to address [::]:{port}")
+        server.start()
+        logger.info("gRPC server started on port %d", actual_port)
+        if app_state is not None:
+            app_state.grpc_running = True
+            app_state.grpc_error = None
+        server.wait_for_termination()
+    except Exception as e:
+        logger.error("gRPC server failed to start: %s", e, exc_info=True)
+        if app_state is not None:
+            app_state.grpc_running = False
+            app_state.grpc_error = str(e)
+
