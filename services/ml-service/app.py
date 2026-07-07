@@ -304,7 +304,7 @@ def classify_endpoint(request: ClassifyRequest):
 
         return parsed
     except Exception as e:
-        print(f"Classification endpoint failed: {e}")
+        log.error("Classification endpoint failed: %s", e, exc_info=True)
         keyword_type = _keyword_fallback(request.query) or "commonsense"
         return {
             "intent": "factual",
@@ -333,7 +333,7 @@ def embed_endpoint(request: EmbedRequest):
         vector = emb.cpu().squeeze(0).numpy().astype("float32").tolist()
         return {"embedding": vector}
     except Exception as e:
-        print(f"Embed endpoint failed: {e}")
+        log.error("Embed endpoint failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -346,7 +346,7 @@ def rerank_endpoint(request: RerankRequest):
         scores = reranker_model.predict(pairs)
         return {"scores": [float(score) for score in scores]}
     except Exception as e:
-        print(f"Rerank endpoint failed: {e}")
+        log.error("Rerank endpoint failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

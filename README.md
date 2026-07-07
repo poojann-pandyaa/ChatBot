@@ -145,6 +145,19 @@ Health and readiness probes (used by Docker and Kubernetes).
 
 ---
 
+## Kafka Topology
+
+The platform uses Redpanda (Kafka-compatible) event-streaming backbone for asynchronous side-effects (semantic cache updates, usage counters, and read-model builders). 
+
+The following topics are explicitly configured and managed:
+
+| Topic Name | Partitions | Replica Factor | Retention Period | Consumer Groups | Purpose |
+|---|---|---|---|---|---|
+| `chat-completed` | 3 | 1 (Dev) | 7 days (`604800000` ms) | `cache-update-group`, `usage-analytics-group`, `read-model-group` | Main chat-completed event backbone. Decoupled from the request path. |
+| `chat-completed.DLT` | 1 | 1 (Dev) | 14 days (`1209600000` ms) | `dlq-monitoring-group` | Dead Letter Queue (DLQ). Receives poison-pill messages after 3 failed retries. |
+
+---
+
 ## Key Design Patterns
 
 | Pattern | Where | Purpose |
