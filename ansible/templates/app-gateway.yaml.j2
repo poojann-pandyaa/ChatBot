@@ -33,13 +33,19 @@ spec:
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_PASSWORD
-          value: "{{ redis_password }}"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: redis-password
         - name: SPRING_DATASOURCE_URL
           value: "jdbc:postgresql://postgres:5432/chatbot_db"
         - name: SPRING_DATASOURCE_USERNAME
           value: "postgres"
         - name: SPRING_DATASOURCE_PASSWORD
-          value: "{{ postgres_password }}"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: postgres-password
         - name: VAULT_ENABLED
           value: "true"
         - name: VAULT_ADDR

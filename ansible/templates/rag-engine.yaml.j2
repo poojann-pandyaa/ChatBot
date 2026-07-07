@@ -31,7 +31,10 @@ spec:
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_PASSWORD
-          value: "{{ redis_password }}"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: redis-password
         - name: QDRANT_URL
           value: "http://qdrant:6333"
         - name: ELASTICSEARCH_URL

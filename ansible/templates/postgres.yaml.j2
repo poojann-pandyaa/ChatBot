@@ -25,7 +25,10 @@ spec:
         - name: POSTGRES_USER
           value: "postgres"
         - name: POSTGRES_PASSWORD
-          value: "SuperSecurePostgresPassword123"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: postgres-password
         ports:
         - containerPort: 5432
           name: postgres

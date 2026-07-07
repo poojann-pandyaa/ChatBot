@@ -31,7 +31,10 @@ spec:
         - name: POSTGRESQL_REPLICATION_PASSWORD
           value: "ReplicatorPassword123"
         - name: POSTGRESQL_PASSWORD
-          value: "SuperSecurePostgresPassword123"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: postgres-password
         ports:
         - containerPort: 5432
           name: postgres
