@@ -8,12 +8,20 @@
     k8s_namespace: "llmops-platform"
     docker_registry: "poojan"
     image_tag: "latest"
-    redis_password: "{{ lookup('env', 'REDIS_PASSWORD') | default('SuperSecureRedisPassword123', true) }}"
-    postgres_password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('SuperSecurePostgresPassword123', true) }}"
+    redis_password: "{{ lookup('env', 'REDIS_PASSWORD') }}"
+    postgres_password: "{{ lookup('env', 'POSTGRES_PASSWORD') }}"
     vault_root_token: "root-token"
     vault_secret_path: "llmops-platform"
     ollama_model: "gemma2:2b"
     build_dir: "{{ playbook_dir }}/build"
+
+  pre_tasks:
+    - name: Assert that database and Redis environment passwords are set and non-empty
+      assert:
+        that:
+          - lookup('env', 'REDIS_PASSWORD') | length > 0
+          - lookup('env', 'POSTGRES_PASSWORD') | length > 0
+        fail_msg: "FATAL: REDIS_PASSWORD and POSTGRES_PASSWORD environment variables must be defined and non-empty to run this playbook."
 
   roles:
     - k8s_deploy
