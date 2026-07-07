@@ -20,74 +20,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("ml-service")
 
 # Prompt and helper constants for Classifier
-CLASSIFIER_PROMPT = """Classify the query into one reasoning type: commonsense, adaptive, or strategic.
+CLASSIFIER_PROMPT = """Classify the query below. Follow the exact format shown in the examples.
 
-commonsense = simple factual question with one direct answer (how to do X, what is X)
-adaptive    = multi-part question: explains a concept AND asks when/how to use it
-strategic   = direct comparison between two or more options (X vs Y, which is better)
-
-Examples:
-Query: How do I reverse a list in Python?
-Intent: procedural
-Reasoning Type: commonsense
-Scope: single_topic
-Sub-questions: How do I reverse a list in Python?
-
-Query: What does git stash do?
-Intent: factual
-Reasoning Type: commonsense
-Scope: single_topic
-Sub-questions: What does git stash do?
-
-Query: How do I read a file line by line in Python?
-Intent: procedural
-Reasoning Type: commonsense
-Scope: single_topic
-Sub-questions: How do I read a file line by line in Python?
-
-Query: What is async/await and when should I use it?
+Query: What is the difference between a process and a thread?
 Intent: conceptual
 Reasoning Type: adaptive
-Scope: multi_topic
-Sub-questions: What is async/await in Python?, How does the event loop work with async/await?, When should you use async/await vs threading?
+Scope: single_topic
+Sub-questions: What is a process?, What is a thread?, How do they differ?
 
-Query: What is LoRA and how do I implement it?
-Intent: conceptual
-Reasoning Type: adaptive
-Scope: multi_topic
-Sub-questions: What is LoRA fine-tuning?, How does LoRA reduce trainable parameters?, How do I implement LoRA with a transformer model?
-
-Query: Explain the difference between list and tuple and which is faster
-Intent: conceptual
-Reasoning Type: adaptive
-Scope: multi_topic
-Sub-questions: What is the difference between list and tuple in Python?, Which is faster for instantiation and element access?, When should you use a tuple instead of a list?
-
-Query: TCP vs UDP which should I use?
+Query: SQL vs NoSQL, which should I use for a high-write logging system?
 Intent: comparative
 Reasoning Type: strategic
 Scope: multi_topic
-Sub-questions: What are the differences between TCP and UDP?, What are the tradeoffs of each?, When should you choose TCP vs UDP?
+Sub-questions: What are SQL's write characteristics?, What are NoSQL's write characteristics?, Which fits high-write logging?
 
-Query: SQL vs NoSQL for a high traffic web app
-Intent: comparative
-Reasoning Type: strategic
-Scope: multi_topic
-Sub-questions: What are the differences between SQL and NoSQL?, How does each perform under high traffic?, Which should you choose based on use case?
-
-Query: multiprocessing vs multithreading in Python
-Intent: comparative
-Reasoning Type: strategic
-Scope: multi_topic
-Sub-questions: What is the difference between multiprocessing and multithreading?, What are the tradeoffs of each?, When should you use multiprocessing vs multithreading?
-
-Now classify this query. Return ONLY the format shown, nothing else.
+Query: How do I fix a NullPointerException in Java?
+Intent: debugging
+Reasoning Type: commonsense
+Scope: single_topic
+Sub-questions: How do I fix a NullPointerException in Java?
 
 Query: {query}
-Intent: <factual|procedural|comparative|conceptual|opinion|debugging>
-Reasoning Type: <commonsense|adaptive|strategic>
-Scope: <single_topic|multi_topic>
-Sub-questions: <1-3 focused sub-questions separated by commas>"""
+Intent:"""
 
 VALID_REASONING_TYPES = {"commonsense", "adaptive", "strategic"}
 VALID_INTENTS = {"factual", "procedural", "comparative", "conceptual", "opinion", "debugging"}
@@ -125,7 +79,8 @@ ADAPTIVE_USAGE_SIGNALS = [
 
 # Pydantic models for request/response
 class ClassifyRequest(BaseModel):
-    query: str
+    query: Optional[str] = None
+    question: Optional[str] = None
 
 class ClassifyResponse(BaseModel):
     intent: str
@@ -278,12 +233,40 @@ def _generate_fallback_subquestions(query: str, reasoning_type: str) -> list:
     return [query]
 
 
+def _extract_entities_heuristic(query: str) -> list[str]:
+    # Capitalized words/phrases (proper nouns), excluding sentence-initial word
+    words = query.split()
+    entities = []
+    for i, w in enumerate(words):
+        clean = w.strip(".,?!:;\"'")
+        if clean and clean[0].isupper() and i != 0:
+            entities.append(clean)
+    # Years / numbers
+    entities += re.findall(r"\b\d{3,4}\b", query)
+    # Dedup, preserve order
+    seen = set()
+    return [e for e in entities if not (e in seen or seen.add(e))]
+
+
+def _estimate_ambiguity(query: str) -> str:
+    vague_markers = ["it", "this", "that", "thing", "stuff", "somehow"]
+    word_count = len(query.split())
+    has_vague = any(re.search(rf"\b{m}\b", query.lower()) for m in vague_markers)
+    if word_count < 5 or has_vague:
+        return "high"
+    if word_count < 10:
+        return "medium"
+    return "low"
+
+
 @app.post("/classify", response_model=ClassifyResponse)
 def classify_endpoint(request: ClassifyRequest):
     if not _models_ready:
         raise HTTPException(status_code=503, detail="Models not loaded")
+    
+    query_text = request.query or request.question or ""
     try:
-        prompt = CLASSIFIER_PROMPT.format(query=request.query)
+        prompt = CLASSIFIER_PROMPT.format(query=query_text)
         outputs = classifier_pipeline(prompt)
         response = outputs[0]["generated_text"].strip()
 
@@ -293,7 +276,7 @@ def classify_endpoint(request: ClassifyRequest):
             "entities": [],
             "scope": "single_topic",
             "ambiguity": "low",
-            "sub_questions": [request.query],
+            "sub_questions": [query_text],
         }
 
         for line in response.split("\n"):
@@ -320,26 +303,35 @@ def classify_endpoint(request: ClassifyRequest):
                     if sqs:
                         parsed["sub_questions"] = sqs
 
-        keyword_type = _keyword_fallback(request.query)
+        # Heuristic enhancements (computed independently of model generation)
+        parsed["entities"] = _extract_entities_heuristic(query_text)
+        parsed["ambiguity"] = _estimate_ambiguity(query_text)
+
+        # Log warning if the model output fails to match format
+        if parsed["intent"] == "factual" and parsed["reasoning_type"] == "commonsense" and parsed["scope"] == "single_topic":
+            if not any(k in response.lower() for k in ("intent:", "reasoning type:", "scope:")):
+                log.warning("Classifier model output did not match expected format. Raw output: %r", response)
+
+        keyword_type = _keyword_fallback(query_text)
         if keyword_type and parsed["reasoning_type"] == "commonsense":
             parsed["reasoning_type"] = keyword_type
             parsed["scope"] = "multi_topic"
             if len(parsed["sub_questions"]) == 1:
                 parsed["sub_questions"] = _generate_fallback_subquestions(
-                    request.query, keyword_type
+                    query_text, keyword_type
                 )
 
         return parsed
     except Exception as e:
         log.error("Classification endpoint failed: %s", e, exc_info=True)
-        keyword_type = _keyword_fallback(request.query) or "commonsense"
+        keyword_type = _keyword_fallback(query_text) or "commonsense"
         return {
             "intent": "factual",
             "reasoning_type": keyword_type,
-            "entities": [],
+            "entities": _extract_entities_heuristic(query_text),
             "scope": "multi_topic" if keyword_type != "commonsense" else "single_topic",
-            "ambiguity": "low",
-            "sub_questions": [request.query],
+            "ambiguity": _estimate_ambiguity(query_text),
+            "sub_questions": [query_text],
         }
 
 
