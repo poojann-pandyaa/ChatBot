@@ -86,4 +86,57 @@ public class ConversationListService {
             }
         }
     }
+
+    /**
+     * Renames a conversation by id, searching across all shards.
+     * Returns true if found and renamed, false if not found.
+     */
+    public boolean renameInShards(String conversationId, String newTitle) {
+        for (DataSourceContextHolder.RouteKey shard :
+                List.of(DataSourceContextHolder.RouteKey.SHARD_0_WRITE,
+                        DataSourceContextHolder.RouteKey.SHARD_1_WRITE)) {
+            DataSourceContextHolder.setRoute(shard);
+            try {
+                int updated = jdbcTemplate.update(
+                        "UPDATE conversations SET title = ? WHERE id = ?",
+                        newTitle, conversationId);
+                if (updated > 0) {
+                    log.info("Shard {}: renamed conversation {} to '{}'", shard, conversationId, newTitle);
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to rename in shard {}: {}", shard, e.getMessage());
+            } finally {
+                DataSourceContextHolder.clear();
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Deletes a single conversation and its messages across all shards.
+     * Returns true if found and deleted in any shard.
+     */
+    public boolean deleteConversationInShards(String conversationId) {
+        boolean deleted = false;
+        for (DataSourceContextHolder.RouteKey shard :
+                List.of(DataSourceContextHolder.RouteKey.SHARD_0_WRITE,
+                        DataSourceContextHolder.RouteKey.SHARD_1_WRITE)) {
+            DataSourceContextHolder.setRoute(shard);
+            try {
+                jdbcTemplate.update("DELETE FROM messages WHERE conversation_id = ?", conversationId);
+                int convs = jdbcTemplate.update("DELETE FROM conversations WHERE id = ?", conversationId);
+                if (convs > 0) {
+                    log.info("Shard {}: deleted conversation {}", shard, conversationId);
+                    deleted = true;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to delete from shard {}: {}", shard, e.getMessage());
+            } finally {
+                DataSourceContextHolder.clear();
+            }
+        }
+        return deleted;
+    }
 }
+

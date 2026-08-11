@@ -207,7 +207,7 @@ public class ChatController {
      */
     @DeleteMapping("/api/conversation/{id}")
     public Mono<ResponseEntity<Void>> deleteConversation(@PathVariable String id) {
-        return Mono.fromRunnable(() -> conversationCommandService.deleteConversation(id))
+        return Mono.fromRunnable(() -> conversationListService.deleteConversationInShards(id))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then(redisTemplate.delete("conversation:" + id + ":summary"))
                 .then(Mono.just(ResponseEntity.<Void>noContent().build()));
@@ -241,16 +241,17 @@ public class ChatController {
             return Mono.just(ResponseEntity.badRequest().<Map<String, String>>build());
         }
         return Mono.fromCallable(() -> {
-            shardRouter.bindWriteRoute(userId);
-            return conversationRepository.findById(id).map(conv -> {
-                conv.setTitle(newName);
-                conversationRepository.save(conv);
+            boolean found = conversationListService.renameInShards(id, newName);
+            if (found) {
                 return ResponseEntity.ok(Map.of("id", id, "name", newName));
-            }).orElse(ResponseEntity.<Map<String, String>>notFound().build());
+            } else {
+                return (ResponseEntity<Map<String, String>>) (ResponseEntity<?>) ResponseEntity.notFound().build();
+            }
         }).subscribeOn(Schedulers.boundedElastic())
         .flatMap(resp -> redisTemplate.delete("conversation:" + id + ":summary")
                 .thenReturn(resp));
     }
+
 
     @GetMapping("/health")
     public Mono<Map<String, String>> health() {
