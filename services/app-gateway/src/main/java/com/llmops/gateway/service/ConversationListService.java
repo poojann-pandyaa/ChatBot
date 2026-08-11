@@ -138,5 +138,32 @@ public class ConversationListService {
         }
         return deleted;
     }
+
+    /**
+     * Checks if the given conversationId is owned by userId across all shards.
+     * Returns true if a matching record is found, false otherwise.
+     */
+    public boolean isOwner(String conversationId, String userId) {
+        for (DataSourceContextHolder.RouteKey shard :
+                List.of(DataSourceContextHolder.RouteKey.SHARD_0_WRITE,
+                        DataSourceContextHolder.RouteKey.SHARD_1_WRITE)) {
+            DataSourceContextHolder.setRoute(shard);
+            try {
+                List<String> results = jdbcTemplate.query(
+                        "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                        (rs, __) -> rs.getString("id"),
+                        conversationId, userId);
+                if (!results.isEmpty()) {
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to check ownership in shard {}: {}", shard, e.getMessage());
+            } finally {
+                DataSourceContextHolder.clear();
+            }
+        }
+        return false;
+    }
 }
+
 

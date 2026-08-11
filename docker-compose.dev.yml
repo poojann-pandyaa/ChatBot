@@ -162,6 +162,7 @@ services:
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123}
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:29092
+      - JWT_SECRET=${JWT_SECRET:-SuperSecretJWTKey1234567890ABCDEFGH}
     depends_on:
       redis:
         condition: service_healthy

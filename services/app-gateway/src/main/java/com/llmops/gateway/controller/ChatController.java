@@ -7,6 +7,7 @@ import com.llmops.gateway.model.ChatMessage;
 import com.llmops.gateway.model.ChatRequest;
 import com.llmops.gateway.model.UserChatRequest;
 import com.llmops.gateway.repository.ConversationRepository;
+import com.llmops.gateway.security.JwtAuthFilter;
 import com.llmops.gateway.service.ConversationCommandService;
 import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
@@ -22,6 +23,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ServerWebExchange;
+import jakarta.validation.Valid;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
@@ -70,9 +73,17 @@ public class ChatController {
                 .register(meterRegistry);
     }
 
+    /** Extracts the authenticated userId injected by JwtAuthFilter. Falls back to request field. */
+    private String resolveUserId(ServerWebExchange exchange, String fallback) {
+        String jwtUser = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
+        return jwtUser != null ? jwtUser : fallback;
+    }
+
     @PostMapping("/api/chat")
-    public Mono<ResponseEntity<?>> chat(@RequestBody UserChatRequest request) {
+    public Mono<ResponseEntity<?>> chat(@Valid @RequestBody UserChatRequest request, ServerWebExchange exchange) {
         requestCounter.increment();
+        // Override userId from JWT — never trust the body's user_id field
+        final String authenticatedUserId = resolveUserId(exchange, request.userId());
 
         // 1. Fetch history from CQRS read model (falls back to Postgres on cache miss)
         return conversationQueryService.getConversationHistory(request.conversationId())
@@ -95,10 +106,15 @@ public class ChatController {
                             request.stream()
                     );
 
+                    // Build a JWT-scoped request so the authenticated userId is used for persistence
+                    UserChatRequest scopedRequest = new UserChatRequest(
+                            request.prompt(), request.conversationId(),
+                            request.debug(), request.stream(), authenticatedUserId);
+
                     if (request.stream()) {
-                        return handleStreamResponse(request, clientRequest);
+                        return handleStreamResponse(scopedRequest, clientRequest);
                     } else {
-                        return handleNonStreamResponse(request, clientRequest);
+                        return handleNonStreamResponse(scopedRequest, clientRequest);
                     }
                 });
     }
@@ -165,12 +181,23 @@ public class ChatController {
     }
 
     @GetMapping("/api/history/{conversationId}")
-    public Mono<ResponseEntity<Object>> getHistory(@PathVariable String conversationId) {
-        return conversationQueryService.getConversationHistory(conversationId)
-                .map(history -> ResponseEntity.ok((Object) history))
-                .onErrorResume(e -> {
-                    Object errorBody = Map.of("error", e.getMessage());
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorBody));
+    public Mono<ResponseEntity<Object>> getHistory(
+            @PathVariable String conversationId, ServerWebExchange exchange) {
+        String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
+        return Mono.fromCallable(() -> conversationListService.isOwner(conversationId, userId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(isOwner -> {
+                    if (!isOwner) {
+                        log.warn("User {} attempted to access conversation {} without ownership", userId, conversationId);
+                        Object forbidden = Map.of("error", "Forbidden", "message", "You do not own this conversation");
+                        return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN).body(forbidden));
+                    }
+                    return conversationQueryService.getConversationHistory(conversationId)
+                            .map(history -> ResponseEntity.ok((Object) history))
+                            .onErrorResume(e -> {
+                                Object errorBody = Map.of("error", e.getMessage());
+                                return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorBody));
+                            });
                 });
     }
 
@@ -195,8 +222,8 @@ public class ChatController {
      * X-User-Id header is optional; defaults to "default_user".
      */
     @GetMapping("/api/conversations")
-    public Mono<ResponseEntity<List<Map<String, String>>>> listConversations(
-            @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
+    public Mono<ResponseEntity<List<Map<String, String>>>> listConversations(ServerWebExchange exchange) {
+        String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
         return Mono.fromCallable(() -> ResponseEntity.ok(conversationListService.listAllShards(userId)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -206,11 +233,21 @@ public class ChatController {
      * Also evicts the Redis summary key.
      */
     @DeleteMapping("/api/conversation/{id}")
-    public Mono<ResponseEntity<Void>> deleteConversation(@PathVariable String id) {
-        return Mono.fromRunnable(() -> conversationListService.deleteConversationInShards(id))
+    public Mono<ResponseEntity<Void>> deleteConversation(
+            @PathVariable String id, ServerWebExchange exchange) {
+        String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
+        return Mono.fromCallable(() -> conversationListService.isOwner(id, userId))
                 .subscribeOn(Schedulers.boundedElastic())
-                .then(redisTemplate.delete("conversation:" + id + ":summary"))
-                .then(Mono.just(ResponseEntity.<Void>noContent().build()));
+                .flatMap(isOwner -> {
+                    if (!isOwner) {
+                        log.warn("User {} attempted to delete conversation {} without ownership", userId, id);
+                        return Mono.just(ResponseEntity.<Void>status(HttpStatus.FORBIDDEN).build());
+                    }
+                    return Mono.fromRunnable(() -> conversationListService.deleteConversationInShards(id))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .then(redisTemplate.delete("conversation:" + id + ":summary"))
+                            .then(Mono.just(ResponseEntity.<Void>noContent().build()));
+                });
     }
 
     /**
@@ -218,8 +255,8 @@ public class ChatController {
      * Also evicts all matching Redis summary keys.
      */
     @DeleteMapping("/api/conversations")
-    public Mono<ResponseEntity<Void>> clearAllConversations(
-            @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
+    public Mono<ResponseEntity<Void>> clearAllConversations(ServerWebExchange exchange) {
+        String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
         return Mono.fromRunnable(() -> conversationListService.deleteAllShards(userId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then(redisTemplate.keys("conversation:*:summary")
@@ -235,21 +272,30 @@ public class ChatController {
     public Mono<ResponseEntity<Map<String, String>>> renameConversation(
             @PathVariable String id,
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
+            ServerWebExchange exchange) {
+        String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
         String newName = body.get("name");
         if (newName == null || newName.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().<Map<String, String>>build());
         }
-        return Mono.fromCallable(() -> {
-            boolean found = conversationListService.renameInShards(id, newName);
-            if (found) {
-                return ResponseEntity.ok(Map.of("id", id, "name", newName));
-            } else {
-                return (ResponseEntity<Map<String, String>>) (ResponseEntity<?>) ResponseEntity.notFound().build();
-            }
-        }).subscribeOn(Schedulers.boundedElastic())
-        .flatMap(resp -> redisTemplate.delete("conversation:" + id + ":summary")
-                .thenReturn(resp));
+        return Mono.fromCallable(() -> conversationListService.isOwner(id, userId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(isOwner -> {
+                    if (!isOwner) {
+                        log.warn("User {} attempted to rename conversation {} without ownership", userId, id);
+                        return Mono.just((ResponseEntity<Map<String, String>>) (ResponseEntity<?>) ResponseEntity.status(HttpStatus.FORBIDDEN).build());
+                    }
+                    return Mono.fromCallable(() -> {
+                        boolean found = conversationListService.renameInShards(id, newName);
+                        if (found) {
+                            return ResponseEntity.ok(Map.of("id", id, "name", newName));
+                        } else {
+                            return (ResponseEntity<Map<String, String>>) (ResponseEntity<?>) ResponseEntity.notFound().build();
+                        }
+                    }).subscribeOn(Schedulers.boundedElastic())
+                    .flatMap(resp -> redisTemplate.delete("conversation:" + id + ":summary")
+                            .thenReturn(resp));
+                });
     }
 
 

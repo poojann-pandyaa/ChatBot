@@ -46,6 +46,58 @@ export default function Home({
 }: HomeProps) {
   const { t } = useTranslation('chat');
 
+  // AUTH STATE ─────────────────────────────────────────────────────────────────
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [authUserId, setAuthUserId] = useState<string>('');
+  const [loginUserId, setLoginUserId] = useState<string>('');
+  const [loginPassword, setLoginPassword] = useState<string>('');
+  const [loginError, setLoginError] = useState<string>('');
+  const [loginLoading, setLoginLoading] = useState<boolean>(false);
+
+  const isLoggedIn = !!authToken;
+
+  /** Builds auth headers for every fetch call */
+  const authHeaders = (): Record<string, string> =>
+    authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+
+  const handleLogin = async () => {
+    if (!loginUserId.trim() || !loginPassword.trim()) {
+      setLoginError('Please enter both username and password.');
+      return;
+    }
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: loginUserId.trim(), password: loginPassword.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setAuthToken(data.token);
+        setAuthUserId(data.user_id);
+        sessionStorage.setItem('jwt_token', data.token);
+        sessionStorage.setItem('jwt_user_id', data.user_id);
+      } else {
+        setLoginError(data.error || 'Invalid credentials.');
+      }
+    } catch {
+      setLoginError('Cannot reach the authentication service. Is the backend running?');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    setAuthUserId('');
+    sessionStorage.removeItem('jwt_token');
+    sessionStorage.removeItem('jwt_user_id');
+    setConversations([]);
+    setSelectedConversation(undefined as any);
+  };
+
   // STATE ----------------------------------------------
 
   const [loading, setLoading] = useState<boolean>(false);
@@ -113,6 +165,7 @@ export default function Home({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders(),
         },
         signal: controller.signal,
         body,
@@ -121,7 +174,14 @@ export default function Home({
       if (!response.ok) {
         setLoading(false);
         setMessageIsStreaming(false);
-        toast.error(response.statusText);
+        if (response.status === 401) {
+          handleLogout();
+          toast.error('Session expired. Please log in again.');
+        } else if (response.status === 429) {
+          toast.error('Rate limit reached. Please wait a moment.');
+        } else {
+          toast.error(response.statusText);
+        }
         return;
       }
 
@@ -314,7 +374,10 @@ export default function Home({
 
   const handleSelectConversation = async (conversation: Conversation) => {
     try {
-      const res = await fetch(`/api/history/${conversation.id}`);
+      const res = await fetch(`/api/history/${conversation.id}`, {
+        headers: authHeaders(),
+      });
+      if (res.status === 401) { handleLogout(); return; }
       if (res.ok) {
         const data = await res.json();
         if (data && data.messages) {
@@ -447,7 +510,10 @@ export default function Home({
     }
 
     // Persist deletion to backend
-    fetch(`/api/conversation/${conversation.id}`, { method: 'DELETE' })
+    fetch(`/api/conversation/${conversation.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
       .catch(err => console.error('Failed to delete conversation on backend', err));
   };
 
@@ -472,7 +538,7 @@ export default function Home({
     if (data.key === 'name') {
       fetch(`/api/conversation/${conversation.id}/rename`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ name: data.value }),
       }).catch(err => console.error('Failed to rename conversation on backend', err));
     }
@@ -500,7 +566,7 @@ export default function Home({
     // Persist clear-all to backend
     fetch('/api/conversations', {
       method: 'DELETE',
-      headers: { 'X-User-Id': 'default_user' },
+      headers: authHeaders(),
     }).catch(err => console.error('Failed to clear conversations on backend', err));
   };
 
@@ -586,6 +652,14 @@ export default function Home({
   // ON LOAD --------------------------------------------
 
   useEffect(() => {
+    // Restore JWT from sessionStorage on page reload
+    const storedToken = sessionStorage.getItem('jwt_token');
+    const storedUserId = sessionStorage.getItem('jwt_user_id');
+    if (storedToken && storedUserId) {
+      setAuthToken(storedToken);
+      setAuthUserId(storedUserId);
+    }
+
     const theme = localStorage.getItem('theme');
     if (theme) {
       setLightMode(theme as 'dark' | 'light');
@@ -616,8 +690,11 @@ export default function Home({
     }
 
     // Load conversation list from backend (Postgres is the authority)
-    fetch('/api/conversations', { headers: { 'X-User-Id': 'default_user' } })
-      .then(res => res.json())
+    fetch('/api/conversations', { headers: authHeaders() })
+      .then(res => {
+        if (res.status === 401) { handleLogout(); return Promise.reject('Unauthorized'); }
+        return res.json();
+      })
       .then((list: Array<{id: string; name: string}>) => {
         const mapped: Conversation[] = list.map(c => ({
           id: c.id,
@@ -678,7 +755,84 @@ export default function Home({
         />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-      {selectedConversation && (
+
+      {/* ── Login Screen ─────────────────────────────────────────── */}
+      {!isLoggedIn && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          height: '100vh', width: '100vw', background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
+        }}>
+          <div style={{
+            background: 'rgba(255,255,255,0.07)', backdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px',
+            padding: '40px 48px', width: '100%', maxWidth: '420px', boxShadow: '0 25px 60px rgba(0,0,0,0.5)',
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+              <div style={{ fontSize: '36px', marginBottom: '8px' }}>🤖</div>
+              <h1 style={{ color: '#fff', fontSize: '24px', fontWeight: 700, margin: 0 }}>LLMOps Chat</h1>
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginTop: '6px' }}>Sign in to continue</p>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>
+                Username
+              </label>
+              <input
+                id="login-user-input"
+                type="text"
+                value={loginUserId}
+                onChange={e => setLoginUserId(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                placeholder="alice, bob, or admin"
+                style={{
+                  width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>
+                Password
+              </label>
+              <input
+                id="login-pass-input"
+                type="password"
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                placeholder="••••••••"
+                style={{
+                  width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            {loginError && (
+              <p style={{ color: '#ff6b6b', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>
+                {loginError}
+              </p>
+            )}
+            <button
+              id="login-submit-btn"
+              onClick={handleLogin}
+              disabled={loginLoading}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
+                background: loginLoading ? 'rgba(99,102,241,0.5)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                color: '#fff', fontSize: '15px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer',
+                transition: 'opacity 0.2s',
+              }}
+            >
+              {loginLoading ? 'Signing in…' : 'Sign In'}
+            </button>
+            <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', marginTop: '24px' }}>
+              Demo users: alice / alice123 · bob / bob123 · admin / admin123
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Main Chat App ─────────────────────────────────────────── */}
+      {isLoggedIn && selectedConversation && (
         <main
           className={`flex h-screen w-screen flex-col text-sm text-white dark:text-white ${lightMode}`}
         >
@@ -687,6 +841,30 @@ export default function Home({
               selectedConversation={selectedConversation}
               onNewConversation={handleNewConversation}
             />
+          </div>
+
+          {/* User badge + Logout button */}
+          <div style={{
+            position: 'fixed', top: '8px', right: '12px', zIndex: 100,
+            display: 'flex', alignItems: 'center', gap: '10px',
+          }}>
+            <span style={{
+              color: 'rgba(255,255,255,0.6)', fontSize: '12px',
+              background: 'rgba(255,255,255,0.08)', padding: '4px 10px', borderRadius: '20px',
+            }}>
+              👤 {authUserId}
+            </span>
+            <button
+              id="logout-btn"
+              onClick={handleLogout}
+              style={{
+                background: 'rgba(255,80,80,0.15)', border: '1px solid rgba(255,80,80,0.3)',
+                color: 'rgba(255,120,120,0.9)', fontSize: '12px', padding: '4px 12px',
+                borderRadius: '20px', cursor: 'pointer',
+              }}
+            >
+              Sign out
+            </button>
           </div>
 
           <div className="flex h-full w-full pt-[48px] sm:pt-0">
