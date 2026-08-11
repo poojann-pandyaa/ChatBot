@@ -47,20 +47,8 @@ pipeline {
             }
         }
 
-        stage('Prepare ML Service Cache') {
-            steps {
-                sh '''
-                mkdir -p services/ml-service/hf_cache
-                if [ -d services/rag-engine/hf_cache ]; then
-                  cp -R services/rag-engine/hf_cache/. services/ml-service/hf_cache/
-                  echo "Copied HuggingFace cache from services/rag-engine/hf_cache."
-                else
-                  echo "No services/rag-engine/hf_cache directory found; continuing with empty services/ml-service/hf_cache."
-                fi
-                '''
-            }
-        }
-        
+
+
         stage('Build Container Images') {
             parallel {
                 stage('Build RAG Engine') {
