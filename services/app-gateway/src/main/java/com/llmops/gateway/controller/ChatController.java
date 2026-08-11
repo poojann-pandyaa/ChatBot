@@ -65,24 +65,16 @@ public class ChatController {
     @PostMapping("/api/chat")
     public Mono<ResponseEntity<?>> chat(@RequestBody UserChatRequest request) {
         requestCounter.increment();
-        String redisKey = "chat:" + request.conversationId();
 
-        // 1. Fetch history from Redis BEFORE pushing the new prompt
-        return redisTemplate.opsForList().range(redisKey, 0, -1)
-                .collectList()
+        // 1. Fetch history from CQRS read model (falls back to Postgres on cache miss)
+        return conversationQueryService.getConversationHistory(request.conversationId())
                 .flatMap(history -> {
-                    // 2. Log user message to Redis history
-                    Mono<Long> redisPushUser = redisTemplate.opsForList().rightPush(redisKey, "user:" + request.prompt());
-
-                    // Parse stored "role:content" strings into ChatMessage objects
-                    List<ChatMessage> historyMsgs = history.stream().map(msg -> {
-                        int colonIndex = msg.indexOf(':');
-                        if (colonIndex != -1) {
-                            return new ChatMessage(msg.substring(0, colonIndex), msg.substring(colonIndex + 1));
-                        } else {
-                            return new ChatMessage("user", msg);
-                        }
-                    }).toList();
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, String>> rawMessages = (List<Map<String, String>>) history.get("messages");
+                    
+                    List<ChatMessage> historyMsgs = rawMessages.stream()
+                            .map(m -> new ChatMessage(m.get("role"), m.get("content")))
+                            .toList();
 
                     // Keep last 10 messages for context window
                     int start = Math.max(0, historyMsgs.size() - 10);
@@ -96,15 +88,15 @@ public class ChatController {
                     );
 
                     if (request.stream()) {
-                        return redisPushUser.then(handleStreamResponse(request, clientRequest, redisKey));
+                        return handleStreamResponse(request, clientRequest);
                     } else {
-                        return redisPushUser.then(handleNonStreamResponse(request, clientRequest, redisKey));
+                        return handleNonStreamResponse(request, clientRequest);
                     }
                 });
     }
 
     private Mono<ResponseEntity<?>> handleStreamResponse(
-            UserChatRequest request, ChatRequest clientRequest, String redisKey) {
+            UserChatRequest request, ChatRequest clientRequest) {
 
         StringBuilder accumulatedAnswer = new StringBuilder();
         String title = buildTitle(request.prompt());
@@ -127,13 +119,11 @@ public class ChatController {
                 .doFinally(signalType -> {
                     if (signalType == SignalType.ON_COMPLETE) {
                         String finalAnswer = accumulatedAnswer.toString();
-                        redisTemplate.opsForList().rightPush(redisKey, "assistant:" + finalAnswer)
-                                .then(Mono.fromRunnable(() ->
-                                        conversationCommandService.saveConversationAndEvent(
-                                                request.conversationId(), title, request.userId(),
-                                                request.prompt(), finalAnswer, "unknown")
-                                ).subscribeOn(Schedulers.boundedElastic()))
-                                .subscribe();
+                        Mono.fromRunnable(() ->
+                                conversationCommandService.saveConversationAndEvent(
+                                        request.conversationId(), title, request.userId(),
+                                        request.prompt(), finalAnswer, "unknown")
+                        ).subscribeOn(Schedulers.boundedElastic()).subscribe();
                     }
                 });
 
@@ -143,7 +133,7 @@ public class ChatController {
     }
 
     private Mono<ResponseEntity<?>> handleNonStreamResponse(
-            UserChatRequest request, ChatRequest clientRequest, String redisKey) {
+            UserChatRequest request, ChatRequest clientRequest) {
 
         String title = buildTitle(request.prompt());
 
@@ -151,13 +141,13 @@ public class ChatController {
                 .flatMap(res -> {
                     String answer = (String) res.getOrDefault("answer", "");
                     String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
-                    return redisTemplate.opsForList().rightPush(redisKey, "assistant:" + answer)
-                            .then(Mono.fromRunnable(() ->
-                                    conversationCommandService.saveConversationAndEvent(
-                                            request.conversationId(), title, request.userId(),
-                                            request.prompt(), answer, reasoningType)
-                            ).subscribeOn(Schedulers.boundedElastic()))
-                            .thenReturn(ResponseEntity.ok().body(res));
+                    
+                    return Mono.fromRunnable(() ->
+                            conversationCommandService.saveConversationAndEvent(
+                                    request.conversationId(), title, request.userId(),
+                                    request.prompt(), answer, reasoningType)
+                    ).subscribeOn(Schedulers.boundedElastic())
+                    .thenReturn(ResponseEntity.ok().body(res));
                 });
     }
 
@@ -174,6 +164,20 @@ public class ChatController {
                     Object errorBody = Map.of("error", e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorBody));
                 });
+    }
+
+    @PostMapping("/api/admin/rebuild-history")
+    public Mono<ResponseEntity<Map<String, String>>> rebuildHistory() {
+        Mono<Void> deleteSummaries = redisTemplate.keys("conversation:*:summary")
+                .flatMap(key -> redisTemplate.opsForValue().delete(key))
+                .then();
+        
+        Mono<Void> deleteChats = redisTemplate.keys("chat:*")
+                .flatMap(key -> redisTemplate.opsForValue().delete(key))
+                .then();
+
+        return Mono.when(deleteSummaries, deleteChats)
+                .then(Mono.just(ResponseEntity.ok(Map.of("message", "Cleared Redis history cache. It will rebuild from Postgres on next access."))));
     }
 
     @GetMapping("/health")

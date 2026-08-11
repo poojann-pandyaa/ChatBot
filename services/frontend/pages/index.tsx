@@ -312,7 +312,18 @@ export default function Home({
     setPrompts(prompts);
   };
 
-  const handleSelectConversation = (conversation: Conversation) => {
+  const handleSelectConversation = async (conversation: Conversation) => {
+    try {
+      const res = await fetch(`/api/history/${conversation.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.messages) {
+          conversation = { ...conversation, messages: data.messages };
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch history for conversation", error);
+    }
     setSelectedConversation(conversation);
     saveConversation(conversation);
   };
@@ -600,7 +611,19 @@ export default function Home({
       const cleanedSelectedConversation = cleanSelectedConversation(
         parsedSelectedConversation,
       );
-      setSelectedConversation(cleanedSelectedConversation);
+      
+      fetch(`/api/history/${cleanedSelectedConversation.id}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data && data.messages) {
+               cleanedSelectedConversation.messages = data.messages;
+            }
+            setSelectedConversation(cleanedSelectedConversation);
+        })
+        .catch(err => {
+            console.error("Failed to fetch history on load", err);
+            setSelectedConversation(cleanedSelectedConversation);
+        });
     } else {
       setSelectedConversation({
         id: uuidv4(),

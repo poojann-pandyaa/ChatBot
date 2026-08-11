@@ -2,9 +2,11 @@ package com.llmops.gateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmops.gateway.entity.Conversation;
+import com.llmops.gateway.entity.Message;
 import com.llmops.gateway.entity.OutboxEvent;
 import com.llmops.gateway.kafka.ChatCompletedEvent;
 import com.llmops.gateway.repository.ConversationRepository;
+import com.llmops.gateway.repository.MessageRepository;
 import com.llmops.gateway.repository.OutboxEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,16 +28,19 @@ public class ConversationCommandService {
     private static final Logger log = LoggerFactory.getLogger(ConversationCommandService.class);
 
     private final ConversationRepository conversationRepository;
+    private final MessageRepository messageRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
     private final com.llmops.gateway.sharding.ShardRouter shardRouter;
 
     public ConversationCommandService(
             ConversationRepository conversationRepository,
+            MessageRepository messageRepository,
             OutboxEventRepository outboxEventRepository,
             ObjectMapper objectMapper,
             com.llmops.gateway.sharding.ShardRouter shardRouter) {
         this.conversationRepository = conversationRepository;
+        this.messageRepository = messageRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.objectMapper = objectMapper;
         this.shardRouter = shardRouter;
@@ -60,6 +65,12 @@ public class ConversationCommandService {
                 })
                 .orElseGet(() -> new Conversation(conversationId, LocalDateTime.now(), title, userId));
         conversationRepository.save(conversation);
+
+        // Insert individual messages
+        Message userMessage = new Message(conversationId, "user", query, null);
+        Message assistantMessage = new Message(conversationId, "assistant", answer, reasoningType);
+        messageRepository.saveAll(java.util.List.of(userMessage, assistantMessage));
+
 
         // Serialize and write the outbox event
         ChatCompletedEvent event = ChatCompletedEvent.of(conversationId, userId, query, answer, reasoningType);

@@ -8,7 +8,6 @@ export const updateConversation = (
     if (c.id === updatedConversation.id) {
       return updatedConversation;
     }
-
     return c;
   });
 
@@ -22,9 +21,11 @@ export const updateConversation = (
 };
 
 export const saveConversation = (conversation: Conversation) => {
-  localStorage.setItem('selectedConversation', JSON.stringify(conversation));
+  const toSave = { ...conversation, messages: [] };
+  localStorage.setItem('selectedConversation', JSON.stringify(toSave));
 };
 
 export const saveConversations = (conversations: Conversation[]) => {
-  localStorage.setItem('conversationHistory', JSON.stringify(conversations));
+  const toSave = conversations.map(c => ({ ...c, messages: [] }));
+  localStorage.setItem('conversationHistory', JSON.stringify(toSave));
 };

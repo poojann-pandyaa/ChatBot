@@ -52,6 +52,16 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Flyway — schema migration management -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
         <!-- Resilience4j -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
