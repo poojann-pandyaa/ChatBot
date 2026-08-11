@@ -29,5 +29,5 @@ export const LLMModels: Record<LLMModelID, LLMModel> = {
 // These point to the local model, not OpenAI.
 // ---------------------------------------------------------------------------
 export type OpenAIModel = LLMModel;
-export const OpenAIModelID = LLMModelID;
+export { LLMModelID as OpenAIModelID };
 export const OpenAIModels = LLMModels;

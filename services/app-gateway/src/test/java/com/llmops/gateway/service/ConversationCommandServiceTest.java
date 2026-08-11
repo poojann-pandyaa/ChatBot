@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmops.gateway.entity.Conversation;
 import com.llmops.gateway.entity.OutboxEvent;
 import com.llmops.gateway.repository.ConversationRepository;
+import com.llmops.gateway.repository.MessageRepository;
 import com.llmops.gateway.repository.OutboxEventRepository;
 import com.llmops.gateway.sharding.ShardRouter;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import static org.mockito.Mockito.*;
 public class ConversationCommandServiceTest {
 
     private ConversationRepository conversationRepository;
+    private MessageRepository messageRepository;
     private OutboxEventRepository outboxEventRepository;
     private ShardRouter shardRouter;
     private ConversationCommandService conversationCommandService;
@@ -29,11 +31,13 @@ public class ConversationCommandServiceTest {
     @BeforeEach
     public void setup() {
         conversationRepository = Mockito.mock(ConversationRepository.class);
+        messageRepository = Mockito.mock(MessageRepository.class);
         outboxEventRepository = Mockito.mock(OutboxEventRepository.class);
         shardRouter = Mockito.mock(ShardRouter.class);
 
         conversationCommandService = new ConversationCommandService(
                 conversationRepository,
+                messageRepository,
                 outboxEventRepository,
                 objectMapper,
                 shardRouter

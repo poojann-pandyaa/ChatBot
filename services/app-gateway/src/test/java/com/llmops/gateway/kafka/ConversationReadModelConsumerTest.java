@@ -1,6 +1,7 @@
 package com.llmops.gateway.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.llmops.gateway.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -20,6 +21,7 @@ public class ConversationReadModelConsumerTest {
 
     private RedisTemplate<String, String> redisTemplate;
     private ValueOperations<String, String> valueOperations;
+    private MessageRepository messageRepository;
     private ObjectMapper objectMapper;
     private ConversationReadModelConsumer consumer;
 
@@ -29,8 +31,9 @@ public class ConversationReadModelConsumerTest {
         redisTemplate = mock(RedisTemplate.class);
         valueOperations = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        messageRepository = mock(MessageRepository.class);
         objectMapper = new ObjectMapper();
-        consumer = new ConversationReadModelConsumer(redisTemplate, objectMapper);
+        consumer = new ConversationReadModelConsumer(redisTemplate, messageRepository, objectMapper);
     }
 
     @Test
