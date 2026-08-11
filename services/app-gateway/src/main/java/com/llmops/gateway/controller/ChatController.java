@@ -8,6 +8,7 @@ import com.llmops.gateway.model.ChatRequest;
 import com.llmops.gateway.model.UserChatRequest;
 import com.llmops.gateway.repository.ConversationRepository;
 import com.llmops.gateway.service.ConversationCommandService;
+import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
 import com.llmops.gateway.sharding.ShardRouter;
 import io.micrometer.core.instrument.Counter;
@@ -39,6 +40,7 @@ public class ChatController {
     private final RagEngineGrpcClient ragEngineClient;
     private final ConversationCommandService conversationCommandService;
     private final ConversationQueryService conversationQueryService;
+    private final ConversationListService conversationListService;
     private final ShardRouter shardRouter;
     private final Counter requestCounter;
     private final PrometheusMeterRegistry prometheusRegistry;
@@ -51,6 +53,7 @@ public class ChatController {
             RagEngineGrpcClient ragEngineClient,
             ConversationCommandService conversationCommandService,
             ConversationQueryService conversationQueryService,
+            ConversationListService conversationListService,
             ShardRouter shardRouter,
             MeterRegistry meterRegistry,
             PrometheusMeterRegistry prometheusRegistry) {
@@ -59,6 +62,7 @@ public class ChatController {
         this.ragEngineClient = ragEngineClient;
         this.conversationCommandService = conversationCommandService;
         this.conversationQueryService = conversationQueryService;
+        this.conversationListService = conversationListService;
         this.shardRouter = shardRouter;
         this.prometheusRegistry = prometheusRegistry;
         this.requestCounter = Counter.builder("gateway_requests_total")
@@ -193,18 +197,8 @@ public class ChatController {
     @GetMapping("/api/conversations")
     public Mono<ResponseEntity<List<Map<String, String>>>> listConversations(
             @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
-        return Mono.fromCallable(() -> {
-            shardRouter.bindWriteRoute(userId);
-            List<Map<String, String>> result = conversationRepository
-                    .findByUserIdOrderByCreatedAtDesc(userId)
-                    .stream()
-                    .map(c -> Map.of(
-                            "id", c.getId(),
-                            "name", c.getTitle() != null ? c.getTitle() : "New conversation"
-                    ))
-                    .toList();
-            return ResponseEntity.ok(result);
-        }).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> ResponseEntity.ok(conversationListService.listAllShards(userId)))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
@@ -226,7 +220,7 @@ public class ChatController {
     @DeleteMapping("/api/conversations")
     public Mono<ResponseEntity<Void>> clearAllConversations(
             @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
-        return Mono.fromRunnable(() -> conversationCommandService.deleteAllConversations(userId))
+        return Mono.fromRunnable(() -> conversationListService.deleteAllShards(userId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then(redisTemplate.keys("conversation:*:summary")
                         .flatMap(key -> redisTemplate.delete(key))

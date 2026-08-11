@@ -4,6 +4,7 @@ import com.llmops.gateway.grpc.RagEngineGrpcClient;
 import com.llmops.gateway.model.UserChatRequest;
 import com.llmops.gateway.repository.ConversationRepository;
 import com.llmops.gateway.service.ConversationCommandService;
+import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
 import com.llmops.gateway.sharding.ShardRouter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -33,6 +34,7 @@ public class ChatControllerTest {
     private RagEngineGrpcClient ragEngineClient;
     private ConversationCommandService conversationCommandService;
     private ConversationQueryService conversationQueryService;
+    private ConversationListService conversationListService;
     private ShardRouter shardRouter;
 
     @BeforeEach
@@ -42,6 +44,7 @@ public class ChatControllerTest {
         ragEngineClient = Mockito.mock(RagEngineGrpcClient.class);
         conversationCommandService = Mockito.mock(ConversationCommandService.class);
         conversationQueryService = Mockito.mock(ConversationQueryService.class);
+        conversationListService = Mockito.mock(ConversationListService.class);
         shardRouter = Mockito.mock(ShardRouter.class);
         
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -61,6 +64,7 @@ public class ChatControllerTest {
                 ragEngineClient,
                 conversationCommandService,
                 conversationQueryService,
+                conversationListService,
                 shardRouter,
                 meterRegistry,
                 prometheusRegistry
