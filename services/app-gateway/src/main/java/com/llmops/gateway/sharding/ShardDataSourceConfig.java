@@ -106,6 +106,13 @@ public class ShardDataSourceConfig {
                     "payload TEXT NOT NULL, " +
                     "created_at TIMESTAMP NOT NULL, " +
                     "published BOOLEAN NOT NULL)");
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.messages (" +
+                    "id BIGSERIAL PRIMARY KEY, " +
+                    "conversation_id VARCHAR(255) NOT NULL, " +
+                    "role VARCHAR(50) NOT NULL, " +
+                    "content TEXT NOT NULL, " +
+                    "reasoning_type VARCHAR(100), " +
+                    "created_at TIMESTAMP NOT NULL DEFAULT NOW())");
 
             log.info("Shard schemas and tables (conversations, outbox_events) initialized successfully on primary.");
         } catch (Exception e) {

@@ -8,6 +8,7 @@ import com.llmops.gateway.kafka.ChatCompletedEvent;
 import com.llmops.gateway.repository.ConversationRepository;
 import com.llmops.gateway.repository.MessageRepository;
 import com.llmops.gateway.repository.OutboxEventRepository;
+import com.llmops.gateway.sharding.DataSourceContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -85,6 +86,7 @@ public class ConversationCommandService {
 
         outboxEventRepository.save(new OutboxEvent(conversationId, "chat-completed", payloadJson));
         log.info("Transaction commit succeeded for conversation {} and outbox event.", conversationId);
+        DataSourceContextHolder.clear(); // prevent ThreadLocal leak on reused scheduler threads
     }
 
     /**
@@ -97,6 +99,7 @@ public class ConversationCommandService {
         messageRepository.deleteByConversationId(conversationId);
         conversationRepository.deleteById(conversationId);
         log.info("Deleted conversation {}.", conversationId);
+        DataSourceContextHolder.clear();
     }
 
     /**
@@ -111,5 +114,6 @@ public class ConversationCommandService {
         }
         conversationRepository.deleteAll(userConversations);
         log.info("Deleted {} conversations for user {}.", userConversations.size(), userId);
+        DataSourceContextHolder.clear();
     }
 }
