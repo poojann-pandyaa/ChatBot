@@ -422,6 +422,7 @@ export default function Home({
   };
 
   const handleDeleteConversation = (conversation: Conversation) => {
+    // Optimistically update local state
     const updatedConversations = conversations.filter(
       (c) => c.id !== conversation.id,
     );
@@ -444,6 +445,10 @@ export default function Home({
       });
       localStorage.removeItem('selectedConversation');
     }
+
+    // Persist deletion to backend
+    fetch(`/api/conversation/${conversation.id}`, { method: 'DELETE' })
+      .catch(err => console.error('Failed to delete conversation on backend', err));
   };
 
   const handleUpdateConversation = (
@@ -462,9 +467,19 @@ export default function Home({
 
     setSelectedConversation(single);
     setConversations(all);
+
+    // If the user renamed the conversation, persist to backend
+    if (data.key === 'name') {
+      fetch(`/api/conversation/${conversation.id}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: data.value }),
+      }).catch(err => console.error('Failed to rename conversation on backend', err));
+    }
   };
 
   const handleClearConversations = () => {
+    // Optimistically clear local state
     setConversations([]);
     localStorage.removeItem('conversationHistory');
 
@@ -481,6 +496,12 @@ export default function Home({
     const updatedFolders = folders.filter((f) => f.type !== 'chat');
     setFolders(updatedFolders);
     saveFolders(updatedFolders);
+
+    // Persist clear-all to backend
+    fetch('/api/conversations', {
+      method: 'DELETE',
+      headers: { 'X-User-Id': 'default_user' },
+    }).catch(err => console.error('Failed to clear conversations on backend', err));
   };
 
   const handleEditMessage = (message: Message, messageIndex: number) => {
@@ -594,15 +615,25 @@ export default function Home({
       setPrompts(JSON.parse(prompts));
     }
 
-    const conversationHistory = localStorage.getItem('conversationHistory');
-    if (conversationHistory) {
-      const parsedConversationHistory: Conversation[] =
-        JSON.parse(conversationHistory);
-      const cleanedConversationHistory = cleanConversationHistory(
-        parsedConversationHistory,
-      );
-      setConversations(cleanedConversationHistory);
-    }
+    // Load conversation list from backend (Postgres is the authority)
+    fetch('/api/conversations', { headers: { 'X-User-Id': 'default_user' } })
+      .then(res => res.json())
+      .then((list: Array<{id: string; name: string}>) => {
+        const mapped: Conversation[] = list.map(c => ({
+          id: c.id,
+          name: c.name,
+          messages: [],
+          model: OpenAIModels[defaultModelId],
+          prompt: DEFAULT_SYSTEM_PROMPT,
+          folderId: null,
+        }));
+        setConversations(mapped);
+        localStorage.removeItem('conversationHistory'); // clean up stale data
+      })
+      .catch(err => {
+        console.error('Failed to load conversation list from backend', err);
+        setConversations([]);
+      });
 
     const selectedConversation = localStorage.getItem('selectedConversation');
     if (selectedConversation) {

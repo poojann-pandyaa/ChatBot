@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Handles write operations for conversations.
@@ -84,5 +85,31 @@ public class ConversationCommandService {
 
         outboxEventRepository.save(new OutboxEvent(conversationId, "chat-completed", payloadJson));
         log.info("Transaction commit succeeded for conversation {} and outbox event.", conversationId);
+    }
+
+    /**
+     * Deletes a single conversation and all its messages atomically.
+     * The Redis summary key is evicted by the caller (ChatController).
+     */
+    @Transactional
+    public void deleteConversation(String conversationId) {
+        log.info("Deleting conversation {} and all its messages...", conversationId);
+        messageRepository.deleteByConversationId(conversationId);
+        conversationRepository.deleteById(conversationId);
+        log.info("Deleted conversation {}.", conversationId);
+    }
+
+    /**
+     * Deletes ALL conversations and messages for a given user atomically.
+     */
+    @Transactional
+    public void deleteAllConversations(String userId) {
+        log.info("Deleting all conversations for user {}...", userId);
+        List<Conversation> userConversations = conversationRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        for (Conversation c : userConversations) {
+            messageRepository.deleteByConversationId(c.getId());
+        }
+        conversationRepository.deleteAll(userConversations);
+        log.info("Deleted {} conversations for user {}.", userConversations.size(), userId);
     }
 }

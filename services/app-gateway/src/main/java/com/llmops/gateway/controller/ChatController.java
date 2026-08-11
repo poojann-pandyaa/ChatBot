@@ -180,6 +180,77 @@ public class ChatController {
                 .then(Mono.just(ResponseEntity.ok(Map.of("message", "Cleared Redis history cache. It will rebuild from Postgres on next access."))));
     }
 
+    // ─── Conversation Management ────────────────────────────────────────────────
+
+    /**
+     * Returns all conversations for a user, newest first.
+     * X-User-Id header is optional; defaults to "default_user".
+     */
+    @GetMapping("/api/conversations")
+    public Mono<ResponseEntity<List<Map<String, String>>>> listConversations(
+            @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
+        return Mono.fromCallable(() -> {
+            List<Map<String, String>> result = conversationRepository
+                    .findByUserIdOrderByCreatedAtDesc(userId)
+                    .stream()
+                    .map(c -> Map.of(
+                            "id", c.getId(),
+                            "name", c.getTitle() != null ? c.getTitle() : "New conversation"
+                    ))
+                    .toList();
+            return ResponseEntity.ok(result);
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * Deletes a single conversation and all its messages.
+     * Also evicts the Redis summary key.
+     */
+    @DeleteMapping("/api/conversation/{id}")
+    public Mono<ResponseEntity<Void>> deleteConversation(@PathVariable String id) {
+        return Mono.fromRunnable(() -> conversationCommandService.deleteConversation(id))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then(redisTemplate.delete("conversation:" + id + ":summary"))
+                .then(Mono.just(ResponseEntity.<Void>noContent().build()));
+    }
+
+    /**
+     * Deletes ALL conversations and messages for a user.
+     * Also evicts all matching Redis summary keys.
+     */
+    @DeleteMapping("/api/conversations")
+    public Mono<ResponseEntity<Void>> clearAllConversations(
+            @RequestHeader(value = "X-User-Id", defaultValue = "default_user") String userId) {
+        return Mono.fromRunnable(() -> conversationCommandService.deleteAllConversations(userId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then(redisTemplate.keys("conversation:*:summary")
+                        .flatMap(key -> redisTemplate.delete(key))
+                        .then())
+                .then(Mono.just(ResponseEntity.<Void>noContent().build()));
+    }
+
+    /**
+     * Renames a conversation (updates the title in Postgres and evicts the Redis key).
+     */
+    @PatchMapping("/api/conversation/{id}/rename")
+    public Mono<ResponseEntity<Map<String, String>>> renameConversation(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body) {
+        String newName = body.get("name");
+        if (newName == null || newName.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().<Map<String, String>>build());
+        }
+        return Mono.fromCallable(() -> {
+            return conversationRepository.findById(id).map(conv -> {
+                conv.setTitle(newName);
+                conversationRepository.save(conv);
+                return ResponseEntity.ok(Map.of("id", id, "name", newName));
+            }).orElse(ResponseEntity.<Map<String, String>>notFound().build());
+        }).subscribeOn(Schedulers.boundedElastic())
+        .flatMap(resp -> redisTemplate.delete("conversation:" + id + ":summary")
+                .thenReturn(resp));
+    }
+
     @GetMapping("/health")
     public Mono<Map<String, String>> health() {
         return Mono.just(Map.of("status", "healthy"));

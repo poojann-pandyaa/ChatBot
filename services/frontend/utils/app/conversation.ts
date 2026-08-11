@@ -25,7 +25,9 @@ export const saveConversation = (conversation: Conversation) => {
   localStorage.setItem('selectedConversation', JSON.stringify(toSave));
 };
 
-export const saveConversations = (conversations: Conversation[]) => {
-  const toSave = conversations.map(c => ({ ...c, messages: [] }));
-  localStorage.setItem('conversationHistory', JSON.stringify(toSave));
+// Conversation list is now owned by Postgres (GET /api/conversations).
+// This function is kept for call-site compatibility but no longer persists
+// to localStorage — the backend is the authoritative source.
+export const saveConversations = (_conversations: Conversation[]) => {
+  // no-op: list is fetched from backend on page load
 };

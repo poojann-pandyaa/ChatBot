@@ -24,4 +24,10 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
      * Note: the results should be reversed before being sent to the LLM context window.
      */
     List<Message> findTop10ByConversationIdOrderByCreatedAtDesc(String conversationId);
+
+    /**
+     * Deletes all messages for a given conversation.
+     * Called as part of the deleteConversation transaction.
+     */
+    void deleteByConversationId(String conversationId);
 }
