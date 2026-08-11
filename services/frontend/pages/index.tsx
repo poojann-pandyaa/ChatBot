@@ -38,14 +38,10 @@ import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 
 interface HomeProps {
-  serverSideApiKeyIsSet: boolean;
-  serverSidePluginKeysSet: boolean;
   defaultModelId: OpenAIModelID;
 }
 
 export default function Home({
-  serverSideApiKeyIsSet,
-  serverSidePluginKeysSet,
   defaultModelId,
 }: HomeProps) {
   const { t } = useTranslation('chat');
@@ -77,7 +73,6 @@ export default function Home({
   const handleSend = async (
     message: Message,
     deleteCount = 0,
-    plugin: Plugin | null = null,
   ) => {
     if (selectedConversation) {
       let updatedConversation: Conversation;
@@ -110,7 +105,7 @@ export default function Home({
         conversationId: updatedConversation.id,
       };
 
-      const endpoint = getEndpoint(null);
+      const endpoint = getEndpoint();
       let body = JSON.stringify(chatBody);
 
       const controller = new AbortController();
@@ -616,13 +611,13 @@ export default function Home({
         folderId: null,
       });
     }
-  }, [serverSideApiKeyIsSet]);
+  }, []);
 
   return (
     <>
       <Head>
-        <title>Chatbot UI</title>
-        <meta name="description" content="ChatGPT but better." />
+        <title>LLMOps Chat</title>
+        <meta name="description" content="AI-powered chat backed by a local RAG pipeline." />
         <meta
           name="viewport"
           content="height=device-height ,width=device-width, initial-scale=1, user-scalable=no"
@@ -701,28 +696,11 @@ export default function Home({
 };
 
 export const getServerSideProps: GetServerSideProps = async ({ locale }) => {
-  const defaultModelId =
-    (process.env.DEFAULT_MODEL &&
-      Object.values(OpenAIModelID).includes(
-        process.env.DEFAULT_MODEL as OpenAIModelID,
-      ) &&
-      process.env.DEFAULT_MODEL) ||
-    fallbackModelID;
-
-  let serverSidePluginKeysSet = false;
-
-  const googleApiKey = process.env.GOOGLE_API_KEY;
-  const googleCSEId = process.env.GOOGLE_CSE_ID;
-
-  if (googleApiKey && googleCSEId) {
-    serverSidePluginKeysSet = true;
-  }
+  const defaultModelId = fallbackModelID;
 
   return {
     props: {
-      serverSideApiKeyIsSet: !!process.env.OPENAI_API_KEY,
       defaultModelId,
-      serverSidePluginKeysSet,
       ...(await serverSideTranslations(locale ?? 'en', [
         'common',
         'chat',

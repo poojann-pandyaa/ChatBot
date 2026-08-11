@@ -1,5 +1,5 @@
+// Runtime environment variables for the LLMOps Chat frontend.
+// All communication goes to the local app-gateway — no external AI APIs.
 export interface ProcessEnv {
-  OPENAI_API_KEY: string;
-  OPENAI_API_HOST?: string;
-  OPENAI_ORGANIZATION?: string;
+  APP_GATEWAY_URL: string; // e.g. http://app-gateway:8080
 }
