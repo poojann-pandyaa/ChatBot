@@ -6,22 +6,28 @@
 
   vars:
     k8s_namespace: "llmops-platform"
-    docker_registry: "poojan"
+    docker_registry: "poojannpandyaa"
     image_tag: "latest"
     redis_password: "{{ lookup('env', 'REDIS_PASSWORD') | default(none, true) | mandatory }}"
     postgres_password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default(none, true) | mandatory }}"
-    vault_root_token: "root-token"
-    vault_secret_path: "llmops-platform"
+    postgres_replication_password: "{{ lookup('env', 'POSTGRES_REPLICATION_PASSWORD') | default(none, true) | mandatory }}"
     ollama_model: "gemma2:2b"
     build_dir: "{{ playbook_dir }}/build"
 
   pre_tasks:
-    - name: Assert that database and Redis environment passwords are set and non-empty
+    - name: Assert that all required secret environment variables are set and non-empty
       assert:
         that:
           - lookup('env', 'REDIS_PASSWORD') | length > 0
           - lookup('env', 'POSTGRES_PASSWORD') | length > 0
-        fail_msg: "FATAL: REDIS_PASSWORD and POSTGRES_PASSWORD environment variables must be defined and non-empty to run this playbook."
+          - lookup('env', 'POSTGRES_REPLICATION_PASSWORD') | length > 0
+        fail_msg: "FATAL: REDIS_PASSWORD, POSTGRES_PASSWORD, and POSTGRES_REPLICATION_PASSWORD environment variables must be defined and non-empty."
 
   roles:
     - k8s_deploy
+
+  post_tasks:
+    - name: Purge rendered manifests from build disk to prevent secret leaks
+      file:
+        path: "{{ build_dir }}"
+        state: absent

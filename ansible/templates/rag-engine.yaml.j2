@@ -43,14 +43,6 @@ spec:
           value: "http://ollama:11434"
         - name: OLLAMA_MODEL
           value: "{{ ollama_model }}"
-        - name: VAULT_ENABLED
-          value: "true"
-        - name: VAULT_ADDR
-          value: "http://vault:8200"
-        - name: VAULT_TOKEN
-          value: "{{ vault_root_token }}"
-        - name: VAULT_SECRET_PATH
-          value: "{{ vault_secret_path }}"
         - name: HF_HUB_OFFLINE
           value: "1"
         - name: HF_DATASETS_OFFLINE

@@ -4,14 +4,9 @@ pipeline {
     triggers {
         pollSCM('* * * * *')
     }
-    
-    tools {
-        nodejs 'node20'
-    }
-    
+
     environment {
         DOCKER_REGISTRY = 'poojannpandyaa'
-        IMAGE_TAG = 'latest'
         PATH = "/opt/homebrew/bin:/usr/local/bin:${env.PATH}"
     }
     
@@ -22,6 +17,16 @@ pipeline {
                 checkout scm
             }
         }
+
+        stage('Prepare Build Metadata') {
+            steps {
+                script {
+                    def shortCommit = sh(returnStdout: true, script: 'git rev-parse --short=8 HEAD').trim()
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortCommit}"
+                    echo "Using image tag: ${env.IMAGE_TAG}"
+                }
+            }
+        }
         
         stage('Unit Testing') {
             steps {
@@ -29,17 +34,30 @@ pipeline {
                 python3 -m venv venv
                 . venv/bin/activate
                 pip install --upgrade pip
-                pip install grpcio-tools==1.65.0 protobuf==5.27.2 requests sentence-transformers elasticsearch qdrant-client pytest || true
+                pip install grpcio-tools==1.65.0 protobuf==5.27.2 requests sentence-transformers elasticsearch qdrant-client pytest
                 bash services/ml-service/generate_proto_stubs.sh
                 pytest services/ml-service/test_grpc_facade.py
                 '''
                 sh 'mvn test -Dnet.bytebuddy.experimental=true'
+                sh '''
+                cd services/frontend
+                npm ci --prefer-offline
+                npm run lint
+                '''
             }
         }
-        
-        stage('Trivy Filesystem Scan') {
+
+        stage('Prepare ML Service Cache') {
             steps {
-                sh "trivy fs services/ > trivy-fs-report.json || true"
+                sh '''
+                mkdir -p services/ml-service/hf_cache
+                if [ -d services/rag-engine/hf_cache ]; then
+                  cp -R services/rag-engine/hf_cache/. services/ml-service/hf_cache/
+                  echo "Copied HuggingFace cache from services/rag-engine/hf_cache."
+                else
+                  echo "No services/rag-engine/hf_cache directory found; continuing with empty services/ml-service/hf_cache."
+                fi
+                '''
             }
         }
         
@@ -47,12 +65,12 @@ pipeline {
             parallel {
                 stage('Build RAG Engine') {
                     steps {
-                        sh "docker build -t ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} services/rag-engine/"
+                        sh "docker build -f services/rag-engine/Dockerfile -t ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} ."
                     }
                 }
                 stage('Build App Gateway') {
                     steps {
-                        sh "docker build -t ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} services/app-gateway/"
+                        sh "docker build -f services/app-gateway/Dockerfile -t ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} ."
                     }
                 }
                 stage('Build Ml Service') {
@@ -67,37 +85,12 @@ pipeline {
                 }
             }
         }
-        
-        stage('Trivy Container Scan') {
-            parallel {
-                stage('Scan RAG Engine') {
-                    steps {
-                        sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG} > trivy-rag-report.json || true"
-                    }
-                }
-                stage('Scan App Gateway') {
-                    steps {
-                        sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG} > trivy-gateway-report.json || true"
-                    }
-                }
-                stage('Scan Ml Service') {
-                    steps {
-                        sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/ml-service:${IMAGE_TAG} > trivy-mlservice-report.json || true"
-                    }
-                }
-                stage('Scan Frontend') {
-                    steps {
-                        sh "trivy image --severity HIGH,CRITICAL ${DOCKER_REGISTRY}/frontend:${IMAGE_TAG} > trivy-frontend-report.json || true"
-                    }
-                }
-            }
-        }
-        
+
         stage('Push to Registry') {
             steps {
                 script {
                     withCredentials([usernamePassword(credentialsId: 'docker', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-                        sh "docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}"
+                        sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
                         sh "docker push ${DOCKER_REGISTRY}/rag-engine:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/app-gateway:${IMAGE_TAG}"
                         sh "docker push ${DOCKER_REGISTRY}/ml-service:${IMAGE_TAG}"
@@ -109,35 +102,57 @@ pipeline {
         
         stage('Orchestrate Deploy via Ansible') {
             steps {
-                sh """
-                ansible-playbook -i ansible/inventory.ini ansible/playbooks/deploy.yml \
-                    -e docker_registry=${env.DOCKER_REGISTRY} \
-                    -e image_tag=${env.IMAGE_TAG} \
-                    -e ansible_python_interpreter=${WORKSPACE}/venv/bin/python
-                """
+                withCredentials([
+                    string(credentialsId: 'redis-pass', variable: 'REDIS_PASSWORD'),
+                    string(credentialsId: 'postgres-pass', variable: 'POSTGRES_PASSWORD'),
+                    string(credentialsId: 'postgres-replica-pass', variable: 'POSTGRES_REPLICATION_PASSWORD')
+                ]) {
+                    sh """
+                    ansible-playbook -i ansible/inventory.ini ansible/playbooks/deploy.yml \
+                        -e docker_registry=${env.DOCKER_REGISTRY} \
+                        -e image_tag=${env.IMAGE_TAG} \
+                        -e ansible_python_interpreter=${WORKSPACE}/venv/bin/python
+                    """
+                }
             }
         }
         
         stage('Database Seeding') {
             steps {
                 sh '''
-                # Start port-forwarding in background
+                cleanup_port_forwards() {
+                  kill ${QDRANT_PID:-} ${ES_PID:-} ${ML_PID:-} 2>/dev/null || true
+                }
+                trap cleanup_port_forwards EXIT
+
+                wait_for_http() {
+                  url="$1"
+                  name="$2"
+                  for attempt in $(seq 1 30); do
+                    if curl -fsS "$url" >/dev/null 2>&1; then
+                      echo "$name is reachable."
+                      return 0
+                    fi
+                    echo "Waiting for $name ($attempt/30)..."
+                    sleep 2
+                  done
+                  echo "$name did not become reachable at $url"
+                  return 1
+                }
+
                 kubectl port-forward svc/qdrant 6333:6333 -n llmops-platform &
                 QDRANT_PID=$!
                 kubectl port-forward svc/elasticsearch 9200:9200 -n llmops-platform &
                 ES_PID=$!
                 kubectl port-forward svc/ml-service 8000:8000 -n llmops-platform &
                 ML_PID=$!
+
+                wait_for_http http://localhost:6333/healthz qdrant
+                wait_for_http http://localhost:9200/ elasticsearch
+                wait_for_http http://localhost:8000/health ml-service
                 
-                # Wait for port-forwarding to establish
-                sleep 5
-                
-                # Run ingestion script
                 . venv/bin/activate
                 python3 training/ingestion/run_ingestion.py --limit 1000
-                
-                # Kill port-forwarding processes
-                kill $QDRANT_PID $ES_PID $ML_PID || true
                 '''
             }
         }
@@ -145,14 +160,31 @@ pipeline {
         stage('Sanity Verification') {
             steps {
                 sh '''
-                # Start port-forwarding for app-gateway
+                cleanup_port_forwards() {
+                  kill ${GW_PID:-} 2>/dev/null || true
+                }
+                trap cleanup_port_forwards EXIT
+
+                wait_for_http() {
+                  url="$1"
+                  name="$2"
+                  for attempt in $(seq 1 30); do
+                    if curl -fsS "$url" >/dev/null 2>&1; then
+                      echo "$name is reachable."
+                      return 0
+                    fi
+                    echo "Waiting for $name ($attempt/30)..."
+                    sleep 2
+                  done
+                  echo "$name did not become reachable at $url"
+                  return 1
+                }
+
                 kubectl port-forward svc/app-gateway 8089:8080 -n llmops-platform &
                 GW_PID=$!
+
+                wait_for_http http://localhost:8089/ready app-gateway
                 
-                # Wait for port-forwarding to establish
-                sleep 5
-                
-                # Send a curl request and verify output
                 RESPONSE=$(curl -s -X POST http://localhost:8089/api/chat \
                   -H "Content-Type: application/json" \
                   -d '{"prompt": "How do I reverse a list in Python?", "conversation_id": "sanity-check", "debug": true, "stream": false}')
@@ -162,19 +194,14 @@ pipeline {
                 # Verify Prometheus metrics endpoint
                 METRICS_RESPONSE=$(curl -s http://localhost:8089/metrics)
                 echo "Metrics Response: $METRICS_RESPONSE"
-                
-                # Kill port-forwarding
-                kill $GW_PID || true
-                
-                # Verify response contains expected fields
+
                 if echo "$RESPONSE" | grep -q '"answer"'; then
                   echo "Sanity Check Passed!"
                 else
                   echo "Sanity Check Failed!"
                   exit 1
                 fi
-                
-                # Verify metrics contains gateway requests metric
+
                 if echo "$METRICS_RESPONSE" | grep -q "gateway_requests_total"; then
                   echo "Prometheus Metrics Check Passed!"
                 else

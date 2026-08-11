@@ -13,7 +13,6 @@
   loop:
     - namespace
     - secrets
-    - vault
     - redis
     - postgres
     - postgres-replica
@@ -31,13 +30,12 @@
     state: present
     src: "{{ build_dir }}/namespace.yaml"
 
-- name: Deploy infrastructure services (Vault, Redis, Postgres, Qdrant, Elasticsearch, Ollama)
+- name: Deploy infrastructure services (Redis, Postgres, Qdrant, Elasticsearch, Ollama)
   kubernetes.core.k8s:
     state: present
     src: "{{ build_dir }}/{{ item }}.yaml"
   loop:
     - secrets
-    - vault
     - redis
     - postgres
     - postgres-replica
@@ -45,54 +43,6 @@
     - qdrant
     - elasticsearch
     - ollama
-
-- name: Wait for Vault deployment to be ready
-  kubernetes.core.k8s_info:
-    kind: Deployment
-    name: vault
-    namespace: "{{ k8s_namespace }}"
-  register: vault_info
-  until: >
-    vault_info.resources is defined and
-    vault_info.resources | length > 0 and
-    vault_info.resources[0].status is defined and
-    vault_info.resources[0].status.readyReplicas is defined and
-    vault_info.resources[0].status.readyReplicas == 1
-  retries: 24
-  delay: 5
-
-- name: Get vault pod name
-  kubernetes.core.k8s_info:
-    kind: Pod
-    namespace: "{{ k8s_namespace }}"
-    label_selectors:
-      - app = vault
-  register: vault_pods
-
-- name: Wait for Vault container sys health to be OK
-  kubernetes.core.k8s_exec:
-    namespace: "{{ k8s_namespace }}"
-    pod: "{{ vault_pods.resources[0].metadata.name }}"
-    command: env VAULT_ADDR="http://127.0.0.1:8200" vault status -format=json
-  register: vault_health
-  until: vault_health.rc == 0
-  retries: 12
-  delay: 5
-
-- name: Provision database secrets into Vault
-  kubernetes.core.k8s_exec:
-    namespace: "{{ k8s_namespace }}"
-    pod: "{{ vault_pods.resources[0].metadata.name }}"
-    command: >
-      env VAULT_TOKEN="{{ vault_root_token }}" VAULT_ADDR="http://127.0.0.1:8200"
-      vault kv put secret/{{ vault_secret_path }}
-      RAG_ENGINE_URL="http://rag-engine:8000"
-      REDIS_HOST="redis"
-      REDIS_PORT="6379"
-      REDIS_PASSWORD="{{ redis_password }}"
-      SPRING_DATASOURCE_USERNAME="postgres"
-      SPRING_DATASOURCE_PASSWORD="{{ postgres_password }}"
-  register: vault_secret_out
 
 - name: Deploy application microservices (RAG Engine, App Gateway, Frontend)
   kubernetes.core.k8s:
@@ -107,6 +57,7 @@
 - name: Force rollout restart of microservices to pull latest images
   shell: "kubectl rollout restart deployment/{{ item }} -n {{ k8s_namespace }}"
   loop:
+    - ml-service
     - rag-engine
     - app-gateway
     - frontend

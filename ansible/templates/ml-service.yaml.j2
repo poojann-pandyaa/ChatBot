@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: ml-service
-        image: poojan/ml-service:latest
+        image: {{ docker_registry }}/ml-service:{{ image_tag }}
         imagePullPolicy: IfNotPresent
         env:
         - name: HF_HUB_OFFLINE

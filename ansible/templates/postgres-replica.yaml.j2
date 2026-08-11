@@ -29,7 +29,10 @@ spec:
         - name: POSTGRESQL_REPLICATION_USER
           value: "replicator"
         - name: POSTGRESQL_REPLICATION_PASSWORD
-          value: "ReplicatorPassword123"
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: postgres-replication-password
         - name: POSTGRESQL_PASSWORD
           valueFrom:
             secretKeyRef:

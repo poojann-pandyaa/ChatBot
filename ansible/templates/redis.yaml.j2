@@ -19,7 +19,16 @@ spec:
       - name: redis
         image: redis/redis-stack-server:latest
         imagePullPolicy: IfNotPresent
-        command: ["redis-server", "--requirepass", "{{ redis_password }}", "--loadmodule", "/opt/redis-stack/lib/redisearch.so"]
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: llmops-secrets
+              key: redis-password
+        command:
+        - /bin/sh
+        - -c
+        - exec redis-server --requirepass "$REDIS_PASSWORD" --loadmodule /opt/redis-stack/lib/redisearch.so
         ports:
         - containerPort: 6379
           name: redis

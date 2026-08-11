@@ -50,11 +50,18 @@ app-gateway  ──gRPC──▶  rag-engine  ──gRPC──▶  ml-service (P
 - Docker Desktop
 - At least 8 GB RAM available to Docker
 
-### Run
+### Local Development Setup
 
-```bash
-docker compose -f docker-compose.dev.yml up --build
-```
+1. **Configure Environment Secrets**:
+   Copy `.env.example` to `.env` and fill in local secret values (file is gitignored):
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Launch Stack**:
+   ```bash
+   docker compose -f docker-compose.dev.yml up --build
+   ```
 
 Services start at:
 
@@ -79,6 +86,17 @@ python ingestion/preprocess.py
 # 2. Index into Qdrant (dense) and Elasticsearch (sparse)
 python ingestion/run_ingestion.py
 ```
+
+---
+
+## Secret & Infrastructure Security Architecture
+
+The platform enforces **100% Native Kubernetes Secret Management**:
+
+* **Centralized Secret Store**: All environment secrets (`postgres-password`, `redis-password`, `postgres-replication-password`) are declared strictly inside the `llmops-secrets` Kubernetes Secret ([`ansible/templates/secrets.yaml.j2`](ansible/templates/secrets.yaml.j2)).
+* **Pod Injections**: Microservices and datastores consume secrets exclusively via `valueFrom.secretKeyRef` bindings (zero hardcoded strings or plaintext commands).
+* **Disk Sanitization**: Ansible automatically purges temporary rendered manifest artifacts from disk immediately after deployment to eliminate plaintext credential residue.
+* **No Unnecessary Overhead**: Redundant external secret stores (Vault) have been completely eliminated.
 
 ---
 
@@ -126,21 +144,22 @@ Health and readiness probes (used by Docker and Kubernetes).
 
 ```
 .
-├── docker-compose.dev.yml      # Full local dev stack
+├── docker-compose.dev.yml      # Full local dev stack (Node 20, Redis, Postgres, Redpanda, ML, RAG, Gateway)
+├── .env.example                # Template for local environment secrets
 ├── proto/                      # gRPC .proto definitions (shared)
 ├── services/
 │   ├── app-gateway/            # Java Spring WebFlux gateway
 │   ├── rag-engine/             # Java RAG pipeline + gRPC server
 │   ├── ml-service/             # Python ML models gRPC server
-│   └── frontend/               # Next.js chat UI
+│   └── frontend/               # Next.js 14 chat UI (Node.js 20 LTS)
 ├── training/
 │   ├── ingestion/              # Data preprocessing & indexing scripts
 │   ├── train.py                # Fine-tuning script (LoRA)
 │   ├── export_gguf.py          # Export model to GGUF for Ollama
 │   └── register_model.py       # Register model to MLflow
 ├── configs/                    # Shared taxonomy config
-├── ansible/                    # Infrastructure provisioning playbooks
-└── ci/                         # Jenkinsfile CI/CD pipeline
+├── ansible/                    # Infrastructure provisioning playbooks & k8s roles
+└── ci/                         # Enterprise Jenkinsfile CI/CD pipeline
 ```
 
 ---
@@ -194,13 +213,22 @@ python register_model.py
 
 ---
 
-## CI/CD
+## CI/CD Pipeline Architecture
 
-Jenkins pipeline defined in [`ci/Jenkinsfile`](ci/Jenkinsfile):
+The automated production pipeline is defined in [`ci/Jenkinsfile`](ci/Jenkinsfile):
 
-1. Build & test all services
-2. Build Docker images
-3. Push to registry
-4. Deploy to Kubernetes via Ansible
+1. **Git Checkout & Build Metadata**: Extracts short Git commit SHA and generates dynamic build tags (`${BUILD_NUMBER}-${GIT_COMMIT}`).
+2. **Multi-Stack Unit Testing**:
+   - Python virtualenv: Runs `pytest` for `ml-service` gRPC facade.
+   - Java Maven: Executes `mvn test` for WebFlux services.
+   - Node.js Frontend: Runs `npm ci --prefer-offline` and `npm run lint`.
+3. **ML Model Cache Preparation**: Initializes HuggingFace model cache directory to accelerate image compilation.
+4. **Parallel Docker Image Build**: Concurrently builds 4 microservice container images using context-aware Dockerfiles.
+5. **Secure Registry Push**: Authenticates via `--password-stdin` using Jenkins credentials store (`redis-pass`, `postgres-pass`, `postgres-replica-pass`).
+6. **Ansible Kubernetes Deployment**: Deploys rendered manifests to Minikube/K8s cluster, provisions `llmops-secrets`, and auto-purges disk artifacts.
+7. **Database Seeding**: Temporarily port-forwards vector/document store endpoints to execute data ingestion.
+8. **Automated Sanity Verification**: Validates chat endpoint (`POST /api/chat`), readiness checks, and Prometheus metrics (`/metrics`).
+9. **Workspace Cleanup**: Cleans workspace (`cleanWs()`).
 
-Teardown pipeline: [`ci/Jenkinsfile.destroy`](ci/Jenkinsfile.destroy)
+Infrastructure Teardown Pipeline: [`ci/Jenkinsfile.destroy`](ci/Jenkinsfile.destroy)
+

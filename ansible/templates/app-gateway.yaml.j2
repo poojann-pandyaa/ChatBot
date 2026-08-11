@@ -46,14 +46,6 @@ spec:
             secretKeyRef:
               name: llmops-secrets
               key: postgres-password
-        - name: VAULT_ENABLED
-          value: "true"
-        - name: VAULT_ADDR
-          value: "http://vault:8200"
-        - name: VAULT_TOKEN
-          value: "{{ vault_root_token }}"
-        - name: VAULT_SECRET_PATH
-          value: "{{ vault_secret_path }}"
         ports:
         - containerPort: 8080
           name: http
@@ -66,7 +58,7 @@ spec:
             cpu: "500m"
         readinessProbe:
           httpGet:
-            path: /health
+            path: /ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
