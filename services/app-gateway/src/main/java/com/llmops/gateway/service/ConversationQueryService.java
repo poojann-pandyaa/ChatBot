@@ -44,7 +44,11 @@ public class ConversationQueryService {
 
     /**
      * Retrieves the denormalized conversation history summary from the read model.
-     * Falls back to Postgres on cache miss.
+     * Falls back to Postgres on cache miss OR on Redis connection failure.
+     *
+     * <p>Redis is a soft dependency: any connection-level error (e.g. SocketException,
+     * RedisConnectionException) is caught here and treated as a cache miss so that
+     * the synchronous Postgres fallback path is used instead of propagating a 500.</p>
      */
     public Mono<Map<String, Object>> getConversationHistory(String conversationId) {
         String readModelKey = READ_MODEL_PREFIX + conversationId + READ_MODEL_SUFFIX;
@@ -60,6 +64,12 @@ public class ConversationQueryService {
                         log.error("Failed to parse read model JSON for conversation {}: {}", conversationId, e.getMessage());
                         return Mono.empty(); // Treat parse error as cache miss
                     }
+                })
+                // ── Redis soft-dependency: connection errors fall through to Postgres ──
+                .onErrorResume(ex -> {
+                    log.warn("Redis unavailable for conversation {} ({}): falling back to Postgres.",
+                            conversationId, ex.getMessage());
+                    return rebuildHistoryFromPostgres(conversationId, readModelKey);
                 })
                 .switchIfEmpty(Mono.defer(() -> rebuildHistoryFromPostgres(conversationId, readModelKey)))
                 .defaultIfEmpty(emptyHistory(conversationId));
@@ -84,10 +94,15 @@ public class ConversationQueryService {
         .subscribeOn(Schedulers.boundedElastic())
         .flatMap(history -> {
             try {
-                // Cache warm
+                // Cache warm — best-effort, must not crash if Redis is down
                 String json = objectMapper.writeValueAsString(history);
                 return reactiveRedisTemplate.opsForValue().set(readModelKey, json)
-                        .thenReturn(history);
+                        .thenReturn(history)
+                        .onErrorResume(ex -> {
+                            log.warn("Redis cache warm failed for conversation {} ({}): returning Postgres data directly.",
+                                    conversationId, ex.getMessage());
+                            return Mono.just(history);
+                        });
             } catch (Exception e) {
                 log.error("Failed to serialize rebuilt history for cache warm {}: {}", conversationId, e.getMessage());
                 return Mono.just(history); // still return history even if cache warm fails

@@ -37,6 +37,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Read Replica (dev simulation) ──────────────────────────────────────────
+  # In production this would be a real Postgres streaming replica.
+  # In dev we use a separate container on port 5433 so that the read-pool
+  # and write-pool can be distinguished in pg_stat_activity and connection logs.
+  postgres-replica:
+    image: postgres:15-alpine
+    container_name: postgres-replica-dev
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123}
+      POSTGRES_DB: chatbot_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   qdrant:
     image: qdrant/qdrant:v1.8.0
     container_name: qdrant-dev
@@ -158,7 +177,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-SuperSecureRedisPassword123}
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/chatbot_db
-      - REPLICA_DATASOURCE_URL=jdbc:postgresql://postgres:5432/chatbot_db
+      - REPLICA_DATASOURCE_URL=jdbc:postgresql://postgres-replica:5432/chatbot_db
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123}
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:29092
@@ -172,6 +191,8 @@ services:
         condition: service_started
       redpanda:
         condition: service_started
+      postgres-replica:
+        condition: service_healthy
 
   frontend:
     build:

@@ -306,9 +306,11 @@ public class ChatController {
 
     @GetMapping("/ready")
     public Mono<ResponseEntity<Map<String, Object>>> ready() {
-        Mono<Boolean> redisPing = redisTemplate.getConnectionFactory().getReactiveConnection().ping()
-                .map(pong -> "PONG".equalsIgnoreCase(pong))
-                .onErrorReturn(false);
+        Mono<Boolean> redisPing = Mono.defer(() -> 
+                redisTemplate.getConnectionFactory().getReactiveConnection().ping()
+        )
+        .map(pong -> "PONG".equalsIgnoreCase(pong))
+        .onErrorReturn(false);
 
         Mono<Boolean> dbPing = Mono.fromCallable(() -> {
             try {

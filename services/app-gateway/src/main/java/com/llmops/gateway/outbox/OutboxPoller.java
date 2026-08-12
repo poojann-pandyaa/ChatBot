@@ -68,8 +68,8 @@ public class OutboxPoller {
                 ChatCompletedEvent payload = objectMapper.readValue(
                         event.getPayload(), ChatCompletedEvent.class);
 
-                // Publish to Kafka via the producer
-                chatEventProducer.publish(payload);
+                // Publish to Kafka synchronously — only mark published after broker ack
+                chatEventProducer.publishSync(payload);
 
                 // Mark as published in DB
                 event.setPublished(true);
