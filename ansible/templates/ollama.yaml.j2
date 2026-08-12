@@ -94,3 +94,26 @@ spec:
     name: api
   selector:
     app: ollama
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ollama-network-policy
+  namespace: {{ k8s_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: ollama
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: rag-engine
+    ports:
+    - protocol: TCP
+      port: 11434
+  egress:
+  - {} # Allow all egress for downloading models from internet
