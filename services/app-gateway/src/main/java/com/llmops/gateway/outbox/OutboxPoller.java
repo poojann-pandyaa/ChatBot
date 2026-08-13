@@ -55,7 +55,7 @@ public class OutboxPoller {
     }
 
     private void pollAndPublishForCurrentRoute(int shardIndex) {
-        List<OutboxEvent> pendingEvents = outboxEventRepository.findByPublishedFalseOrderByCreatedAtAsc();
+        List<OutboxEvent> pendingEvents = outboxEventRepository.findTop20ByPublishedFalseOrderByCreatedAtAsc();
         if (pendingEvents.isEmpty()) {
             return;
         }
@@ -81,5 +81,9 @@ public class OutboxPoller {
                         event.getId(), shardIndex, e.getMessage());
             }
         }
+        
+        // Log remaining backlog count
+        long remaining = outboxEventRepository.countByPublishedFalse();
+        log.info("Processed {} outbox events on shard {}. Remaining backlog: {}", pendingEvents.size(), shardIndex, remaining);
     }
 }

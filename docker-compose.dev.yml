@@ -31,6 +31,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123}
       POSTGRES_DB: chatbot_db
+    entrypoint: >
+      /bin/bash -c "
+      mkdir -p /docker-entrypoint-initdb.d &&
+      echo \"echo 'host replication postgres all md5' >> /var/lib/postgresql/data/pg_hba.conf\" > /docker-entrypoint-initdb.d/01-setup-rep.sh &&
+      exec docker-entrypoint.sh postgres -c wal_level=replica -c max_wal_senders=3
+      "
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -50,6 +56,17 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123}
       POSTGRES_DB: chatbot_db
+    entrypoint: >
+      /bin/bash -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        rm -rf /var/lib/postgresql/data/*;
+        echo 'Waiting for primary to be ready...';
+        until pg_isready -h postgres -p 5432 -U postgres; do sleep 1; done;
+        echo 'Taking base backup...';
+        PGPASSWORD=\$${POSTGRES_PASSWORD:-SuperSecurePostgresPassword123} pg_basebackup -h postgres -D /var/lib/postgresql/data -U postgres -vP -R;
+      fi;
+      exec docker-entrypoint.sh postgres
+      "
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -168,7 +185,7 @@ services:
       dockerfile: services/app-gateway/Dockerfile
     container_name: app-gateway-dev
     ports:
-      - "8080:8080"
+      - "8081:8080"
     environment:
       - RAG_ENGINE_URL=http://rag-engine:8000
       - RAG_ENGINE_GRPC_HOST=rag-engine

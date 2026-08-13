@@ -60,4 +60,15 @@ public class GlobalExceptionHandler {
         response.put("message", "Request body exceeds the maximum allowed size (1MB).");
         return ResponseEntity.status(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE).body(response);
     }
+
+    /**
+     * Handle ResponseStatusException to ensure structured JSON output for manual HTTP status errors.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleResponseStatusException(ResponseStatusException ex) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("error", ex.getStatusCode().toString());
+        response.put("message", ex.getReason());
+        return ResponseEntity.status(ex.getStatusCode()).body(response);
+    }
 }

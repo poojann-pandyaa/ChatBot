@@ -13,5 +13,10 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
      * Find all events that have not yet been successfully published to Kafka.
      * Ordered by creation time to preserve sequencing.
      */
-    List<OutboxEvent> findByPublishedFalseOrderByCreatedAtAsc();
+    List<OutboxEvent> findTop20ByPublishedFalseOrderByCreatedAtAsc();
+
+    /**
+     * Count the total number of unpublished events (the backlog).
+     */
+    long countByPublishedFalse();
 }

@@ -11,6 +11,7 @@ import com.llmops.gateway.security.JwtAuthFilter;
 import com.llmops.gateway.service.ConversationCommandService;
 import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
+import com.llmops.gateway.sharding.DataSourceContextHolder;
 import com.llmops.gateway.sharding.ShardRouter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -47,6 +48,7 @@ public class ChatController {
     private final ShardRouter shardRouter;
     private final Counter requestCounter;
     private final PrometheusMeterRegistry prometheusRegistry;
+    private final org.springframework.kafka.core.KafkaAdmin kafkaAdmin;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
@@ -59,7 +61,8 @@ public class ChatController {
             ConversationListService conversationListService,
             ShardRouter shardRouter,
             MeterRegistry meterRegistry,
-            PrometheusMeterRegistry prometheusRegistry) {
+            PrometheusMeterRegistry prometheusRegistry,
+            org.springframework.kafka.core.KafkaAdmin kafkaAdmin) {
         this.redisTemplate = redisTemplate;
         this.conversationRepository = conversationRepository;
         this.ragEngineClient = ragEngineClient;
@@ -68,6 +71,7 @@ public class ChatController {
         this.conversationListService = conversationListService;
         this.shardRouter = shardRouter;
         this.prometheusRegistry = prometheusRegistry;
+        this.kafkaAdmin = kafkaAdmin;
         this.requestCounter = Counter.builder("gateway_requests_total")
                 .description("Total requests received by the gateway")
                 .register(meterRegistry);
@@ -86,7 +90,7 @@ public class ChatController {
         final String authenticatedUserId = resolveUserId(exchange, request.userId());
 
         // 1. Fetch history from CQRS read model (falls back to Postgres on cache miss)
-        return conversationQueryService.getConversationHistory(request.conversationId())
+        return conversationQueryService.getConversationHistory(request.conversationId(), authenticatedUserId)
                 .flatMap(history -> {
                     @SuppressWarnings("unchecked")
                     List<Map<String, String>> rawMessages = (List<Map<String, String>>) history.get("messages");
@@ -143,11 +147,16 @@ public class ChatController {
                 .doFinally(signalType -> {
                     if (signalType == SignalType.ON_COMPLETE) {
                         String finalAnswer = accumulatedAnswer.toString();
-                        Mono.fromRunnable(() ->
+                        Mono.fromRunnable(() -> {
+                            try {
+                                shardRouter.bindWriteRoute(request.userId());
                                 conversationCommandService.saveConversationAndEvent(
                                         request.conversationId(), title, request.userId(),
-                                        request.prompt(), finalAnswer, "unknown")
-                        ).subscribeOn(Schedulers.boundedElastic()).subscribe();
+                                        request.prompt(), finalAnswer, "unknown");
+                            } finally {
+                                DataSourceContextHolder.clear();
+                            }
+                        }).subscribeOn(Schedulers.boundedElastic()).subscribe();
                     }
                 });
 
@@ -166,11 +175,16 @@ public class ChatController {
                     String answer = (String) res.getOrDefault("answer", "");
                     String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
                     
-                    return Mono.fromRunnable(() ->
+                    return Mono.fromRunnable(() -> {
+                        try {
+                            shardRouter.bindWriteRoute(request.userId());
                             conversationCommandService.saveConversationAndEvent(
                                     request.conversationId(), title, request.userId(),
-                                    request.prompt(), answer, reasoningType)
-                    ).subscribeOn(Schedulers.boundedElastic())
+                                    request.prompt(), answer, reasoningType);
+                        } finally {
+                            DataSourceContextHolder.clear();
+                        }
+                    }).subscribeOn(Schedulers.boundedElastic())
                     .thenReturn(ResponseEntity.ok().body(res));
                 });
     }
@@ -192,7 +206,7 @@ public class ChatController {
                         Object forbidden = Map.of("error", "Forbidden", "message", "You do not own this conversation");
                         return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN).body(forbidden));
                     }
-                    return conversationQueryService.getConversationHistory(conversationId)
+                    return conversationQueryService.getConversationHistory(conversationId, userId)
                             .map(history -> ResponseEntity.ok((Object) history))
                             .onErrorResume(e -> {
                                 Object errorBody = Map.of("error", e.getMessage());
@@ -320,23 +334,34 @@ public class ChatController {
             }
         }).subscribeOn(Schedulers.boundedElastic()).onErrorReturn(false);
 
-        return Mono.zip(redisPing, dbPing)
+        Mono<Boolean> kafkaPing = Mono.fromCallable(() -> {
+            try (org.apache.kafka.clients.admin.AdminClient client = 
+                    org.apache.kafka.clients.admin.AdminClient.create(kafkaAdmin.getConfigurationProperties())) {
+                client.describeCluster().clusterId().get(3, java.util.concurrent.TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }).subscribeOn(Schedulers.boundedElastic()).onErrorReturn(false);
+
+        return Mono.zip(redisPing, dbPing, kafkaPing)
                 .map(tuple -> {
                     boolean redisOk = tuple.getT1();
                     boolean dbOk = tuple.getT2();
+                    boolean kafkaOk = tuple.getT3();
                     Map<String, Object> body = Map.of(
-                            "status", redisOk && dbOk ? "ready" : "degraded",
+                            "status", (redisOk && dbOk && kafkaOk) ? "ready" : "degraded",
                             "redis_connected", redisOk,
-                            "db_connected", dbOk
+                            "db_connected", dbOk,
+                            "kafka_connected", kafkaOk
                     );
-                    if (redisOk && dbOk) {
+                    if (redisOk && dbOk && kafkaOk) {
                         return ResponseEntity.ok(body);
                     } else {
                         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
                     }
                 });
     }
-
     @GetMapping(value = "/metrics", produces = "text/plain")
     public Mono<String> getMetrics() {
         return Mono.fromCallable(prometheusRegistry::scrape)

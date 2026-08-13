@@ -61,9 +61,6 @@ public class ShardDataSourceConfig {
 
         ShardRoutingDataSource routingDataSource = new ShardRoutingDataSource();
         routingDataSource.setTargetDataSources(targetDataSources);
-        
-        // Default route is Shard 0 Write
-        routingDataSource.setDefaultTargetDataSource(shard0Write);
         routingDataSource.afterPropertiesSet();
 
         log.info("Routing DataSource initialized successfully with 4 targets.");

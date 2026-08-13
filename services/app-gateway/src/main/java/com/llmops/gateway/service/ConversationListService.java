@@ -158,6 +158,10 @@ public class ConversationListService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to check ownership in shard {}: {}", shard, e.getMessage());
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                        "Service temporarily unavailable (Database failure)"
+                );
             } finally {
                 DataSourceContextHolder.clear();
             }

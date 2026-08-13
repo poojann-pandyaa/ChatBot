@@ -32,14 +32,17 @@ public class ConversationQueryService {
     private final ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
+    private final com.llmops.gateway.sharding.ShardRouter shardRouter;
 
     public ConversationQueryService(
             ReactiveRedisTemplate<String, String> reactiveRedisTemplate,
             MessageRepository messageRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            com.llmops.gateway.sharding.ShardRouter shardRouter) {
         this.reactiveRedisTemplate = reactiveRedisTemplate;
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
+        this.shardRouter = shardRouter;
     }
 
     /**
@@ -50,7 +53,7 @@ public class ConversationQueryService {
      * RedisConnectionException) is caught here and treated as a cache miss so that
      * the synchronous Postgres fallback path is used instead of propagating a 500.</p>
      */
-    public Mono<Map<String, Object>> getConversationHistory(String conversationId) {
+    public Mono<Map<String, Object>> getConversationHistory(String conversationId, String userId) {
         String readModelKey = READ_MODEL_PREFIX + conversationId + READ_MODEL_SUFFIX;
         log.info("Querying CQRS read model for conversation: {}", conversationId);
 
@@ -69,27 +72,38 @@ public class ConversationQueryService {
                 .onErrorResume(ex -> {
                     log.warn("Redis unavailable for conversation {} ({}): falling back to Postgres.",
                             conversationId, ex.getMessage());
-                    return rebuildHistoryFromPostgres(conversationId, readModelKey);
+                    return rebuildHistoryFromPostgres(conversationId, readModelKey, userId);
                 })
-                .switchIfEmpty(Mono.defer(() -> rebuildHistoryFromPostgres(conversationId, readModelKey)))
+                .switchIfEmpty(Mono.defer(() -> rebuildHistoryFromPostgres(conversationId, readModelKey, userId)))
                 .defaultIfEmpty(emptyHistory(conversationId));
     }
 
-    private Mono<Map<String, Object>> rebuildHistoryFromPostgres(String conversationId, String readModelKey) {
+    private Mono<Map<String, Object>> rebuildHistoryFromPostgres(String conversationId, String readModelKey, String userId) {
         log.info("Cache miss for conversation {}. Rebuilding from Postgres...", conversationId);
         return Mono.fromCallable(() -> {
-            List<Message> dbMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
-            if (dbMessages.isEmpty()) {
-                return emptyHistory(conversationId);
+            shardRouter.bindReadRoute(userId);
+            try {
+                List<Message> dbMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+                if (dbMessages.isEmpty()) {
+                    return emptyHistory(conversationId);
+                }
+                List<Map<String, String>> mappedMessages = dbMessages.stream()
+                        .map(m -> Map.of("role", m.getRole(), "content", m.getContent()))
+                        .collect(Collectors.toList());
+                
+                return Map.of(
+                        "conversation_id", conversationId,
+                        "messages", mappedMessages
+                );
+            } catch (Exception ex) {
+                log.error("Postgres unavailable or query failed for conversation {}: {}", conversationId, ex.getMessage());
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, 
+                        "Service temporarily unavailable (Database failure)"
+                );
+            } finally {
+                com.llmops.gateway.sharding.DataSourceContextHolder.clear();
             }
-            List<Map<String, String>> mappedMessages = dbMessages.stream()
-                    .map(m -> Map.of("role", m.getRole(), "content", m.getContent()))
-                    .collect(Collectors.toList());
-            
-            return Map.of(
-                    "conversation_id", conversationId,
-                    "messages", mappedMessages
-            );
         })
         .subscribeOn(Schedulers.boundedElastic())
         .flatMap(history -> {

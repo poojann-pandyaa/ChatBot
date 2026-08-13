@@ -16,6 +16,7 @@ import org.mockito.Mockito;
 import org.springframework.data.redis.core.ReactiveListOperations;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,6 +37,7 @@ public class ChatControllerTest {
     private ConversationQueryService conversationQueryService;
     private ConversationListService conversationListService;
     private ShardRouter shardRouter;
+    private KafkaAdmin kafkaAdmin;
 
     @BeforeEach
     public void setup() {
@@ -46,6 +48,7 @@ public class ChatControllerTest {
         conversationQueryService = Mockito.mock(ConversationQueryService.class);
         conversationListService = Mockito.mock(ConversationListService.class);
         shardRouter = Mockito.mock(ShardRouter.class);
+        kafkaAdmin = Mockito.mock(KafkaAdmin.class);
         
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         PrometheusMeterRegistry prometheusRegistry = Mockito.mock(PrometheusMeterRegistry.class);
@@ -56,8 +59,6 @@ public class ChatControllerTest {
         when(listOps.range(anyString(), anyLong(), anyLong())).thenReturn(Flux.fromIterable(List.of("user:previous prompt", "assistant:previous response")));
         when(listOps.rightPush(anyString(), anyString())).thenReturn(Mono.just(1L));
 
-
-
         ChatController controller = new ChatController(
                 redisTemplate,
                 conversationRepository,
@@ -67,7 +68,8 @@ public class ChatControllerTest {
                 conversationListService,
                 shardRouter,
                 meterRegistry,
-                prometheusRegistry
+                prometheusRegistry,
+                kafkaAdmin
         );
         webTestClient = WebTestClient.bindToController(controller).build();
     }
@@ -111,7 +113,7 @@ public class ChatControllerTest {
                         Map.of("role", "assistant", "content", "This is the RAG answer")
                 )
         );
-        when(conversationQueryService.getConversationHistory("session-123")).thenReturn(Mono.just(mockHistory));
+        when(conversationQueryService.getConversationHistory(eq("session-123"), anyString())).thenReturn(Mono.just(mockHistory));
 
         webTestClient.get().uri("/api/history/session-123")
                 .exchange()
