@@ -90,6 +90,14 @@ public class ShardDataSourceConfig {
                     "created_at TIMESTAMP NOT NULL, " +
                     "published BOOLEAN NOT NULL)");
 
+            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.messages (" +
+                    "id BIGSERIAL PRIMARY KEY, " +
+                    "conversation_id VARCHAR(255) NOT NULL, " +
+                    "role VARCHAR(50) NOT NULL, " +
+                    "content TEXT NOT NULL, " +
+                    "reasoning_type VARCHAR(100), " +
+                    "created_at TIMESTAMP NOT NULL DEFAULT NOW())");
+
             // Create tables in shard_1
             stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.conversations (" +
                     "id VARCHAR(255) PRIMARY KEY, " +

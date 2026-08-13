@@ -33,14 +33,17 @@ public class ConversationReadModelConsumer {
     private final RedisTemplate<String, String> redisTemplate;
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
+    private final com.llmops.gateway.sharding.ShardRouter shardRouter;
 
     public ConversationReadModelConsumer(
             RedisTemplate<String, String> redisTemplate,
             MessageRepository messageRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            com.llmops.gateway.sharding.ShardRouter shardRouter) {
         this.redisTemplate = redisTemplate;
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
+        this.shardRouter = shardRouter;
     }
 
     /**
@@ -62,6 +65,7 @@ public class ConversationReadModelConsumer {
         String readModelKey = READ_MODEL_PREFIX + event.conversationId() + READ_MODEL_SUFFIX;
 
         try {
+            shardRouter.bindReadRoute(event.userId());
             // Read canonical history from Postgres
             List<Message> dbMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(event.conversationId());
             
@@ -87,6 +91,8 @@ public class ConversationReadModelConsumer {
                     event.conversationId(), mappedMessages.size());
         } catch (Exception e) {
             log.error("Failed to update read model for conversation {}: {}", event.conversationId(), e.getMessage());
+        } finally {
+            com.llmops.gateway.sharding.DataSourceContextHolder.clear();
         }
     }
 }

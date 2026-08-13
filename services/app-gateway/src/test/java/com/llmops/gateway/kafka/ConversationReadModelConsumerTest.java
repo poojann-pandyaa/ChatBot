@@ -24,6 +24,7 @@ public class ConversationReadModelConsumerTest {
     private MessageRepository messageRepository;
     private ObjectMapper objectMapper;
     private ConversationReadModelConsumer consumer;
+    private com.llmops.gateway.sharding.ShardRouter shardRouter;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -33,7 +34,8 @@ public class ConversationReadModelConsumerTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         messageRepository = mock(MessageRepository.class);
         objectMapper = new ObjectMapper();
-        consumer = new ConversationReadModelConsumer(redisTemplate, messageRepository, objectMapper);
+        shardRouter = mock(com.llmops.gateway.sharding.ShardRouter.class);
+        consumer = new ConversationReadModelConsumer(redisTemplate, messageRepository, objectMapper, shardRouter);
     }
 
     @Test
