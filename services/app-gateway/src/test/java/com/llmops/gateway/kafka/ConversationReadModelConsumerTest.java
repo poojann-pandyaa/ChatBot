@@ -43,7 +43,17 @@ public class ConversationReadModelConsumerTest {
         // Arrange
         String convId = "conv-123";
         ChatCompletedEvent event = new ChatCompletedEvent(convId, "user-456", "What is LoRA?", "LoRA is low-rank adaptation.", "adaptive", Instant.now());
-        when(valueOperations.get("conversation:" + convId + ":summary")).thenReturn(null);
+        
+        com.llmops.gateway.entity.Message userMsg = new com.llmops.gateway.entity.Message();
+        userMsg.setRole("user");
+        userMsg.setContent("What is LoRA?");
+        
+        com.llmops.gateway.entity.Message asstMsg = new com.llmops.gateway.entity.Message();
+        asstMsg.setRole("assistant");
+        asstMsg.setContent("LoRA is low-rank adaptation.");
+        
+        when(messageRepository.findByConversationIdOrderByCreatedAtAsc(convId))
+                .thenReturn(List.of(userMsg, asstMsg));
 
         // Act
         consumer.consume(event, 0, 100L);
@@ -67,30 +77,4 @@ public class ConversationReadModelConsumerTest {
         assertEquals("LoRA is low-rank adaptation.", messages.get(1).get("content"));
     }
 
-    @Test
-    public void testConsume_DuplicateMessage_IsIdempotentAndSkipsUpdate() throws Exception {
-        // Arrange
-        String convId = "conv-123";
-        ChatCompletedEvent event = new ChatCompletedEvent(convId, "user-456", "What is LoRA?", "LoRA is low-rank adaptation.", "adaptive", Instant.now());
-        
-        // Simulating that the message is already processed and stored in Redis
-        Map<String, Object> existingReadModel = Map.of(
-                "conversation_id", convId,
-                "messages", List.of(
-                        Map.of("role", "user", "content", "What is LoRA?"),
-                        Map.of("role", "assistant", "content", "LoRA is low-rank adaptation.")
-                )
-        );
-        String existingJson = objectMapper.writeValueAsString(existingReadModel);
-        when(valueOperations.get("conversation:" + convId + ":summary")).thenReturn(existingJson);
-
-        // Act
-        consumer.consume(event, 0, 101L);
-
-        // Assert
-        // Verify we read from Redis
-        verify(valueOperations).get("conversation:conv-123:summary");
-        // Verify we DID NOT write back to Redis again (idempotent skip)
-        verify(valueOperations, never()).set(anyString(), anyString());
-    }
 }

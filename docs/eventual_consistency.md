@@ -28,5 +28,3 @@ We explicitly choose to accept **eventual consistency** for read operations acro
   * **Availability over Consistency:** In accordance with the CAP theorem, we prioritize High Availability and Low Latency (AP) for chat reads. Forcing reads to route to the primary database for a time-window after a write adds state management complexity (e.g., tracking write timestamps in the gateway) and increases load on the primary DB, negating the scaling benefit of read replicas.
   * **User Experience (UX) Tolerance:** Chat history reads are not highly time-sensitive financial or transactional records. An occasional delay of a few hundred milliseconds in history synchronization across other sessions (e.g., dual-login screens) is a standard trade-off in modern enterprise chat architectures.
 
-### 3. Kafka Idempotence Protection
-* **Design Decision:** To prevent issues where duplicate or delayed events cause incorrect history updates, the `ConversationReadModelConsumer` uses idempotency checks (verifying the message fingerprint in Redis) before saving, ensuring the denormalized view remains consistent regardless of partition replication speeds.

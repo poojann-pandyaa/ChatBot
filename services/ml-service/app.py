@@ -8,6 +8,7 @@ import threading
 import torch
 import torch.nn.functional as F
 import numpy as np
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Request
@@ -192,6 +193,8 @@ async def lifespan(app: FastAPI):
         # Do NOT re-raise — keep the process alive so /health can report the failure
         # to orchestrators (k8s readiness probe, docker-compose healthcheck).
     yield
+    if getattr(app.state, "grpc_server", None):
+        await asyncio.to_thread(app.state.grpc_server.stop(grace=15).wait)
     log.info("ML Service shutting down.")
 
 
@@ -382,12 +385,14 @@ async def health(http_request: Request):
     """
     loaded = getattr(http_request.app.state, "models_loaded", False)
     grpc_ok = getattr(http_request.app.state, "grpc_running", False)
+    healthy = loaded and grpc_ok
     body = {
-        "status": "healthy" if loaded else "unhealthy",
+        "status": "healthy" if healthy else "unhealthy",
+        "models_loaded": loaded,
         "grpc_running": grpc_ok,
     }
     if not loaded:
         body["error"] = getattr(http_request.app.state, "load_error", None) or "models not loaded"
     if not grpc_ok:
         body["grpc_error"] = getattr(http_request.app.state, "grpc_error", None) or "gRPC not started"
-    return JSONResponse(status_code=200 if loaded else 503, content=body)
+    return JSONResponse(status_code=200 if healthy else 503, content=body)

@@ -34,7 +34,7 @@ pipeline {
                 python3 -m venv venv
                 . venv/bin/activate
                 pip install --upgrade pip
-                pip install grpcio-tools==1.65.0 protobuf==5.27.2 requests sentence-transformers elasticsearch qdrant-client pytest
+                pip install -r services/ml-service/requirements.txt elasticsearch qdrant-client pytest
                 bash services/ml-service/generate_proto_stubs.sh
                 pytest services/ml-service/test_grpc_facade.py
                 '''

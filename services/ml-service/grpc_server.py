@@ -129,6 +129,7 @@ def serve(classify_fn, embed_fn, rerank_fn, port: int = 50051, app_state=None):
         if app_state is not None:
             app_state.grpc_running = True
             app_state.grpc_error = None
+            app_state.grpc_server = server
         server.wait_for_termination()
     except Exception as e:
         logger.error("gRPC server failed to start: %s", e, exc_info=True)

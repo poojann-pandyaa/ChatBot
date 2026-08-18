@@ -8,6 +8,7 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+venv/
 .test_venv/
 .pytest_cache/
 .mypy_cache/

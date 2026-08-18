@@ -91,6 +91,9 @@ public class ChatControllerTest {
                 "sources", List.of()
         );
         when(ragEngineClient.chat(any())).thenReturn(Mono.just(mockRes));
+        
+        Map<String, Object> mockHistory = Map.of("messages", List.of());
+        when(conversationQueryService.getConversationHistory(anyString(), anyString())).thenReturn(Mono.just(mockHistory));
 
         UserChatRequest request = new UserChatRequest("Hello", "session-123", false, false, "user-456");
 
@@ -113,7 +116,8 @@ public class ChatControllerTest {
                         Map.of("role", "assistant", "content", "This is the RAG answer")
                 )
         );
-        when(conversationQueryService.getConversationHistory(eq("session-123"), anyString())).thenReturn(Mono.just(mockHistory));
+        when(conversationQueryService.getConversationHistory(eq("session-123"), isNull())).thenReturn(Mono.just(mockHistory));
+        when(conversationListService.isOwner(eq("session-123"), isNull())).thenReturn(true);
 
         webTestClient.get().uri("/api/history/session-123")
                 .exchange()

@@ -24,7 +24,7 @@ public class ShardRoutingDataSourceTest {
     @Test
     public void testDetermineCurrentLookupKey() {
         // Initially, route context should be null (will fallback to default target datasource)
-        assertNull(routingDataSource.determineCurrentLookupKey());
+        assertThrows(IllegalStateException.class, () -> routingDataSource.determineCurrentLookupKey());
 
         // Set route context to SHARD_0_WRITE
         DataSourceContextHolder.setRoute(DataSourceContextHolder.RouteKey.SHARD_0_WRITE);
@@ -36,6 +36,6 @@ public class ShardRoutingDataSourceTest {
 
         // Clear context
         DataSourceContextHolder.clear();
-        assertNull(routingDataSource.determineCurrentLookupKey());
+        assertThrows(IllegalStateException.class, () -> routingDataSource.determineCurrentLookupKey());
     }
 }

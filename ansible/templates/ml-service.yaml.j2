@@ -15,6 +15,7 @@ spec:
       labels:
         app: ml-service
     spec:
+      terminationGracePeriodSeconds: 30 # Must be >= gRPC drain grace period (15s) + buffer
       containers:
       - name: ml-service
         image: {{ docker_registry }}/ml-service:{{ image_tag }}

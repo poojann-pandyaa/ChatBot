@@ -39,4 +39,7 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 
+# DO NOT add a `--workers` flag here. Multiple forked Uvicorn workers would all try to bind 
+# gRPC port 50051 and only the first would succeed (EADDRINUSE). Horizontal scaling must be 
+# done via additional Kubernetes Pod replicas instead.
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
