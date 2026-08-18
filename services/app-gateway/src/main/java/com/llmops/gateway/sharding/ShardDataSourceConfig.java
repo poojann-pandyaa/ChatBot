@@ -39,7 +39,6 @@ public class ShardDataSourceConfig {
     @Bean
     @Primary
     public DataSource dataSource() {
-        initializeSchemas();
         log.info("Initializing Sharded + Replica routing DataSource...");
 
         // 1. Instantiating 4 physical data sources (2 shards x 2 endpoints)
@@ -51,6 +50,10 @@ public class ShardDataSourceConfig {
                 getShardUrl(replicaUrl, "shard_0"), "shard-0-read-pool");
         DataSource shard1Read = createHikariDataSource(
                 getShardUrl(replicaUrl, "shard_1"), "shard-1-read-pool");
+
+        log.info("Running Flyway migrations for shard schemas...");
+        runFlyway(shard0Write, "shard_0");
+        runFlyway(shard1Write, "shard_1");
 
         // 2. Registering in the AbstractRoutingDataSource map
         Map<Object, Object> targetDataSources = new HashMap<>();
@@ -67,62 +70,13 @@ public class ShardDataSourceConfig {
         return routingDataSource;
     }
 
-    private void initializeSchemas() {
-        log.info("Creating shard schemas and tables if they do not exist on the primary database...");
-        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(primaryUrl, username, password);
-             java.sql.Statement stmt = conn.createStatement()) {
-            
-            // Create schemas
-            stmt.execute("CREATE SCHEMA IF NOT EXISTS shard_0");
-            stmt.execute("CREATE SCHEMA IF NOT EXISTS shard_1");
-            
-            // Create tables in shard_0
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.conversations (" +
-                    "id VARCHAR(255) PRIMARY KEY, " +
-                    "created_at TIMESTAMP, " +
-                    "title VARCHAR(255), " +
-                    "user_id VARCHAR(255))");
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.outbox_events (" +
-                    "id BIGSERIAL PRIMARY KEY, " +
-                    "aggregate_id VARCHAR(255) NOT NULL, " +
-                    "event_type VARCHAR(255) NOT NULL, " +
-                    "payload TEXT NOT NULL, " +
-                    "created_at TIMESTAMP NOT NULL, " +
-                    "published BOOLEAN NOT NULL)");
-
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_0.messages (" +
-                    "id BIGSERIAL PRIMARY KEY, " +
-                    "conversation_id VARCHAR(255) NOT NULL, " +
-                    "role VARCHAR(50) NOT NULL, " +
-                    "content TEXT NOT NULL, " +
-                    "reasoning_type VARCHAR(100), " +
-                    "created_at TIMESTAMP NOT NULL DEFAULT NOW())");
-
-            // Create tables in shard_1
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.conversations (" +
-                    "id VARCHAR(255) PRIMARY KEY, " +
-                    "created_at TIMESTAMP, " +
-                    "title VARCHAR(255), " +
-                    "user_id VARCHAR(255))");
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.outbox_events (" +
-                    "id BIGSERIAL PRIMARY KEY, " +
-                    "aggregate_id VARCHAR(255) NOT NULL, " +
-                    "event_type VARCHAR(255) NOT NULL, " +
-                    "payload TEXT NOT NULL, " +
-                    "created_at TIMESTAMP NOT NULL, " +
-                    "published BOOLEAN NOT NULL)");
-            stmt.execute("CREATE TABLE IF NOT EXISTS shard_1.messages (" +
-                    "id BIGSERIAL PRIMARY KEY, " +
-                    "conversation_id VARCHAR(255) NOT NULL, " +
-                    "role VARCHAR(50) NOT NULL, " +
-                    "content TEXT NOT NULL, " +
-                    "reasoning_type VARCHAR(100), " +
-                    "created_at TIMESTAMP NOT NULL DEFAULT NOW())");
-
-            log.info("Shard schemas and tables (conversations, outbox_events) initialized successfully on primary.");
-        } catch (Exception e) {
-            log.error("Failed to initialize shard schemas and tables on primary: {}", e.getMessage());
-        }
+    private void runFlyway(DataSource dataSource, String schemaName) {
+        org.flywaydb.core.Flyway flyway = org.flywaydb.core.Flyway.configure()
+                .dataSource(dataSource)
+                .schemas(schemaName)
+                .baselineOnMigrate(true)
+                .load();
+        flyway.migrate();
     }
 
     private String getShardUrl(String baseUrl, String schema) {

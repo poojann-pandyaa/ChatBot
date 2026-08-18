@@ -12,6 +12,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+import org.springframework.jdbc.core.JdbcTemplate;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 /**
  * Scheduled background worker that polls the {@code outbox_events} table
  * for unpublished events and publishes them to the Kafka cluster.
@@ -28,29 +32,49 @@ public class OutboxPoller {
     private final OutboxEventRepository outboxEventRepository;
     private final ChatEventProducer chatEventProducer;
     private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbcTemplate;
+    private final ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
 
     public OutboxPoller(
             OutboxEventRepository outboxEventRepository,
             ChatEventProducer chatEventProducer,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            JdbcTemplate jdbcTemplate) {
         this.outboxEventRepository = outboxEventRepository;
         this.chatEventProducer = chatEventProducer;
         this.objectMapper = objectMapper;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Scheduled(fixedDelayString = "${outbox.poller.delay-ms:2000}")
     public void pollAndPublish() {
         for (int shard = 0; shard < 2; shard++) {
-            com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey routeKey = (shard == 0)
-                    ? com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey.SHARD_0_WRITE
-                    : com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey.SHARD_1_WRITE;
-            
-            com.llmops.gateway.sharding.DataSourceContextHolder.setRoute(routeKey);
-            try {
-                pollAndPublishForCurrentRoute(shard);
-            } finally {
-                com.llmops.gateway.sharding.DataSourceContextHolder.clear();
-            }
+            final int currentShard = shard;
+            executorService.submit(() -> {
+                com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey routeKey = (currentShard == 0)
+                        ? com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey.SHARD_0_WRITE
+                        : com.llmops.gateway.sharding.DataSourceContextHolder.RouteKey.SHARD_1_WRITE;
+                
+                com.llmops.gateway.sharding.DataSourceContextHolder.setRoute(routeKey);
+                try {
+                    // Try to acquire advisory lock. 42000 is an arbitrary lock namespace, adding shard for uniqueness.
+                    Boolean lockAcquired = jdbcTemplate.queryForObject(
+                            "SELECT pg_try_advisory_lock(?)", Boolean.class, 42000 + currentShard);
+                    if (Boolean.TRUE.equals(lockAcquired)) {
+                        try {
+                            pollAndPublishForCurrentRoute(currentShard);
+                        } finally {
+                            jdbcTemplate.update("SELECT pg_advisory_unlock(?)", 42000 + currentShard);
+                        }
+                    } else {
+                        log.debug("Could not acquire advisory lock for shard {}. Skipping cycle.", currentShard);
+                    }
+                } catch (Exception e) {
+                    log.error("Error during poll cycle on shard {}", currentShard, e);
+                } finally {
+                    com.llmops.gateway.sharding.DataSourceContextHolder.clear();
+                }
+            });
         }
     }
 

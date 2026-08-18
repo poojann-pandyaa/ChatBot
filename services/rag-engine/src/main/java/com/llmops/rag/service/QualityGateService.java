@@ -1,22 +1,28 @@
 package com.llmops.rag.service;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
 
 @Service
+@ConfigurationProperties(prefix = "rag.quality-gate")
 public class QualityGateService {
 
-    private static final Map<String, Double> QUALITY_THRESHOLDS = Map.of(
+    private Map<String, Double> thresholds = Map.of(
             "commonsense", 0.1,
             "adaptive", 0.05,
             "strategic", 0.02
     );
 
+    public void setThresholds(Map<String, Double> thresholds) {
+        this.thresholds = thresholds;
+    }
+
     public record QualityGateResult(boolean passed, double averageScore, double threshold) {}
 
     public QualityGateResult evaluate(List<Map<String, Object>> rerankedResults, String reasoningType) {
-        double threshold = QUALITY_THRESHOLDS.getOrDefault(reasoningType, 0.1);
+        double threshold = thresholds.getOrDefault(reasoningType, 0.1);
         if (rerankedResults == null || rerankedResults.isEmpty()) {
             return new QualityGateResult(false, 0.0, threshold);
         }

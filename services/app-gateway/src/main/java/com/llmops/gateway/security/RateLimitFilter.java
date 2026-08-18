@@ -18,7 +18,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * WebFilter that applies per-user rate limiting on /api/chat.
@@ -33,7 +34,9 @@ public class RateLimitFilter implements WebFilter {
     private static final int REQUESTS_PER_MINUTE = 20;
     private static final String RATE_LIMITED_PATH = "/api/chat";
 
-    private final ConcurrentHashMap<String, Bucket> userBuckets = new ConcurrentHashMap<>();
+    private final Cache<String, Bucket> userBuckets = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofHours(1))
+            .build();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
@@ -52,7 +55,7 @@ public class RateLimitFilter implements WebFilter {
             return chain.filter(exchange);
         }
 
-        Bucket bucket = userBuckets.computeIfAbsent(userId, this::createBucket);
+        Bucket bucket = userBuckets.get(userId, this::createBucket);
 
         if (bucket.tryConsume(1)) {
             return chain.filter(exchange);

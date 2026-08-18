@@ -10,6 +10,8 @@ import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import io.micrometer.core.instrument.MeterRegistry;
+import com.llmops.rag.config.RagCacheProperties;
 
 import com.llmops.rag.config.RedisCommandExecutor;
 import java.nio.ByteBuffer;
@@ -30,6 +32,8 @@ public class RouterService {
     private final GeneratorService generatorService;
     private final RerankerService rerankerService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
+    private final MeterRegistry meterRegistry;
+    private final RagCacheProperties cacheProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
@@ -40,7 +44,9 @@ public class RouterService {
             ReasoningEngine reasoningEngine,
             GeneratorService generatorService,
             RerankerService rerankerService,
-            ReactiveRedisTemplate<String, String> redisTemplate) {
+            ReactiveRedisTemplate<String, String> redisTemplate,
+            MeterRegistry meterRegistry,
+            RagCacheProperties cacheProperties) {
         this.mlServiceClient = mlServiceClient;
         this.followupDetector = followupDetector;
         this.qualityGateService = qualityGateService;
@@ -48,6 +54,8 @@ public class RouterService {
         this.generatorService = generatorService;
         this.rerankerService = rerankerService;
         this.redisTemplate = redisTemplate;
+        this.meterRegistry = meterRegistry;
+        this.cacheProperties = cacheProperties;
     }
 
     private byte[] toByteArray(List<Double> vector) {
@@ -99,7 +107,7 @@ public class RouterService {
                             if (properties.containsKey("score")) {
                                 score = Double.parseDouble(properties.get("score"));
                             }
-                            double threshold = "commonsense".equals(reasoningType) || "unknown".equals(reasoningType) ? 0.05 : 0.08;
+                            double threshold = cacheProperties.getReadThresholds().getOrDefault(reasoningType != null ? reasoningType : "unknown", 0.05);
                             if (score <= threshold) {
                                 log.info("Semantic Cache HIT! Score: {} (threshold: {})", score, threshold);
                                 @SuppressWarnings("unchecked")
@@ -150,19 +158,24 @@ public class RouterService {
                                 ByteBuffer.wrap("sources".getBytes(StandardCharsets.UTF_8)), ByteBuffer.wrap(sourcesJson.getBytes(StandardCharsets.UTF_8))
                         )
                 );
+                
+                long ttl = cacheProperties.getTtlSeconds().getOrDefault(reasoningType != null ? reasoningType : "unknown", 86400L);
                 Mono<Boolean> expire = conn.keyCommands().expire(
                         ByteBuffer.wrap(key.getBytes(StandardCharsets.UTF_8)),
-                        java.time.Duration.ofSeconds(86400)
+                        java.time.Duration.ofSeconds(ttl)
                 );
                 return hset.then(expire);
             }).then()
+            .retry(3)
             .doOnSuccess(v -> log.info("Saved to semantic cache: {}", key))
             .onErrorResume(e -> {
-                log.warn("Async cache save failed: {}", e.getMessage());
+                log.warn("Async cache save failed after retries: {}", e.getMessage());
+                meterRegistry.counter("rag_cache_writes_failed_total").increment();
                 return Mono.empty();
             });
         } catch (Exception e) {
             log.error("Failed to hash cache query: {}", e.getMessage());
+            meterRegistry.counter("rag_cache_writes_failed_total").increment();
             return Mono.empty();
         }
     }
@@ -250,7 +263,15 @@ public class RouterService {
                                                                     )).toList();
                                                                     return rerankerService.rerank(rewrittenPrompt, candidatesToRerank, 5)
                                                                             .map(rerankedCombined -> {
-                                                                                trace.setRerankedFinal(rerankedCombined);
+                                                                                QualityGateService.QualityGateResult finalQg = qualityGateService.evaluate(rerankedCombined, reasoningType);
+                                                                                if (!finalQg.passed()) {
+                                                                                    trace.getRouterDecisions().put("quality_gate_failed_twice", true);
+                                                                                    log.warn("Quality gate FAILED TWICE. Using graceful fallback.");
+                                                                                    trace.setFinalAnswer("I couldn't find a confident answer in my knowledge base. Could you provide more context or rephrase your question?");
+                                                                                    trace.setRerankedFinal(rerankedCombined);
+                                                                                } else {
+                                                                                    trace.setRerankedFinal(rerankedCombined);
+                                                                                }
                                                                                 return trace;
                                                                             });
                                                                 });
@@ -260,6 +281,15 @@ public class RouterService {
                                                     }
 
                                                     return pipelineMono.flatMap(finalTrace -> {
+                                                        if (finalTrace.getFinalAnswer() != null && finalTrace.getRouterDecisions().containsKey("quality_gate_failed_twice")) {
+                                                            List<SourceMetadata> sources = formatSources(finalTrace.getRerankedFinal());
+                                                            return Mono.just(new ChatResponse(
+                                                                    finalTrace.getFinalAnswer(),
+                                                                    reasoningType,
+                                                                    sources,
+                                                                    includeTrace ? finalTrace.toMap() : null
+                                                            ));
+                                                        }
                                                         List<SourceMetadata> sources = formatSources(finalTrace.getRerankedFinal());
                                                         String promptForGeneration = generatorService.buildPrompt(
                                                                 finalTrace.getQuery(),
@@ -366,7 +396,15 @@ public class RouterService {
                                                                     )).toList();
                                                                     return rerankerService.rerank(rewrittenPrompt, candidatesToRerank, 5)
                                                                             .map(rerankedCombined -> {
-                                                                                trace.setRerankedFinal(rerankedCombined);
+                                                                                QualityGateService.QualityGateResult finalQg = qualityGateService.evaluate(rerankedCombined, reasoningType);
+                                                                                if (!finalQg.passed()) {
+                                                                                    trace.getRouterDecisions().put("quality_gate_failed_twice", true);
+                                                                                    log.warn("Quality gate FAILED TWICE (streaming). Using graceful fallback.");
+                                                                                    trace.setFinalAnswer("I couldn't find a confident answer in my knowledge base. Could you provide more context or rephrase your question?");
+                                                                                    trace.setRerankedFinal(rerankedCombined);
+                                                                                } else {
+                                                                                    trace.setRerankedFinal(rerankedCombined);
+                                                                                }
                                                                                 return trace;
                                                                             });
                                                                 });
@@ -377,6 +415,20 @@ public class RouterService {
 
                                                     return pipelineMono.flatMapMany(finalTrace -> {
                                                         List<SourceMetadata> sources = formatSources(finalTrace.getRerankedFinal());
+                                                        
+                                                        Map<String, Object> tracePayload = Map.of(
+                                                                "reasoning_type", reasoningType,
+                                                                "sub_questions", classification.getOrDefault("sub_questions", List.of()),
+                                                                "sources", sources,
+                                                                "router_decisions", finalTrace.getRouterDecisions()
+                                                        );
+                                                        String traceLine = serializeJson(Map.of("type", "trace", "data", tracePayload)) + "\n";
+                                                        
+                                                        if (finalTrace.getFinalAnswer() != null && finalTrace.getRouterDecisions().containsKey("quality_gate_failed_twice")) {
+                                                            String tokenLine = serializeJson(Map.of("type", "token", "data", finalTrace.getFinalAnswer())) + "\n";
+                                                            return Flux.just(traceLine, tokenLine);
+                                                        }
+
                                                         String promptForGeneration = generatorService.buildPrompt(
                                                                 finalTrace.getQuery(),
                                                                 finalTrace.getRerankedFinal(),
@@ -385,14 +437,6 @@ public class RouterService {
                                                                 history
                                                         );
                                                         finalTrace.setGenerationPrompt(promptForGeneration);
-
-                                                        Map<String, Object> tracePayload = Map.of(
-                                                                "reasoning_type", reasoningType,
-                                                                "sub_questions", classification.getOrDefault("sub_questions", List.of()),
-                                                                "sources", sources,
-                                                                "router_decisions", finalTrace.getRouterDecisions()
-                                                        );
-                                                        String traceLine = serializeJson(Map.of("type", "trace", "data", tracePayload)) + "\n";
 
                                                         StringBuilder accumulatedAnswer = new StringBuilder();
                                                         Flux<String> tokensFlux = generatorService.generateStream(promptForGeneration)

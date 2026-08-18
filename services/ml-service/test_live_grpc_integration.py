@@ -77,3 +77,38 @@ def test_live_grpc_rerank(live_grpc_server):
         resp = stub.Rerank(req)
         
         assert list(resp.scores) == pytest.approx([0.85, 0.45])
+
+def test_graceful_shutdown():
+    """Verifies that calling app_state.grpc_server.stop(grace=1).wait() terminates the serve() loop."""
+    import threading
+    class DummyState:
+        pass
+    app_state = DummyState()
+    app_state.grpc_running = False
+    
+    # Start the server in a thread
+    thread = threading.Thread(
+        target=grpc_server.serve,
+        args=(mock_classify, mock_embed, mock_rerank, 0, app_state)
+    )
+    thread.start()
+    
+    # Wait for the server to be running and app_state to be populated
+    timeout = time.time() + 5
+    while not getattr(app_state, 'grpc_running', False) and time.time() < timeout:
+        time.sleep(0.1)
+        
+    assert getattr(app_state, 'grpc_running', False) is True
+    assert hasattr(app_state, 'grpc_server')
+    
+    # Trigger shutdown
+    start_time = time.time()
+    app_state.grpc_server.stop(grace=1).wait()
+    
+    # wait_for_termination() should exit and thread should join
+    thread.join(timeout=3)
+    
+    assert not thread.is_alive(), "serve() did not terminate after server.stop()"
+    
+    elapsed = time.time() - start_time
+    assert elapsed < 3.0, f"Shutdown took too long: {elapsed}s"

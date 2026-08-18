@@ -65,7 +65,7 @@ public class ReasoningEngine {
                                 trace.getRetrievedPerSubquery().put(sq, ids);
                             }
                             return ranked;
-                        })
+                        }), 3
                 )
                 .collectList()
                 .map(lists -> {
@@ -102,7 +102,7 @@ public class ReasoningEngine {
                                 trace.getRetrievedPerSubquery().put(sq, ids);
                             }
                             return ranked;
-                        })
+                        }), 3
                 )
                 .collectList()
                 .map(lists -> lists.stream().flatMap(Collection::stream).toList());

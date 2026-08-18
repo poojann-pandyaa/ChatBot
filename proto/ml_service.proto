@@ -31,6 +31,7 @@ message EmbedRequest {
 
 message EmbedResponse {
   repeated float embedding = 1;
+  bytes embedding_bytes = 2;
 }
 
 // ─── Rerank ───────────────────────────────────────────────────────────────────

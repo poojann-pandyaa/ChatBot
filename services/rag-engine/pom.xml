@@ -50,6 +50,10 @@
             <artifactId>resilience4j-reactor</artifactId>
             <version>${resilience4j.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
 
         <!-- Actuator & Prometheus for metrics -->
         <dependency>

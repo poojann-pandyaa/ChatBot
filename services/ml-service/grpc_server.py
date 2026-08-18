@@ -45,6 +45,9 @@ class MlServiceServicer(ml_service_pb2_grpc.MlServiceServicer):
         """Classify RPC — calls classify_endpoint directly."""
         logger.info("gRPC Classify called for query: %s", request.query[:80])
         try:
+            if not context.is_active():
+                return ml_service_pb2.ClassifyResponse()
+            
             from app import ClassifyRequest as PyClassifyRequest
             py_req = PyClassifyRequest(query=request.query)
             result = self._classify(py_req)
@@ -71,13 +74,16 @@ class MlServiceServicer(ml_service_pb2_grpc.MlServiceServicer):
         """Embed RPC — calls embed_endpoint directly."""
         logger.info("gRPC Embed called for text[:80]: %s", request.text[:80])
         try:
+            if not context.is_active():
+                return ml_service_pb2.EmbedResponse()
+            
             from app import EmbedRequest as PyEmbedRequest
-            py_req = PyEmbedRequest(text=request.text)
+            py_req = PyEmbedRequest(text=request.text, return_bytes=True)
             result = self._embed(py_req)
             if not isinstance(result, dict):
                 result = result.dict()
             return ml_service_pb2.EmbedResponse(
-                embedding=result.get("embedding", [])
+                embedding_bytes=result.get("embedding_bytes", b"")
             )
         except Exception as e:
             logger.error("gRPC Embed error: %s", e)
@@ -92,6 +98,9 @@ class MlServiceServicer(ml_service_pb2_grpc.MlServiceServicer):
         logger.info("gRPC Rerank called for query: %s, %d docs",
                     request.query[:80], len(request.documents))
         try:
+            if not context.is_active():
+                return ml_service_pb2.RerankResponse()
+            
             from app import RerankRequest as PyRerankRequest
             py_req = PyRerankRequest(query=request.query, documents=list(request.documents))
             result = self._rerank(py_req)
@@ -130,7 +139,12 @@ def serve(classify_fn, embed_fn, rerank_fn, port: int = 50051, app_state=None):
             app_state.grpc_running = True
             app_state.grpc_error = None
             app_state.grpc_server = server
-        server.wait_for_termination()
+        
+        try:
+            server.wait_for_termination()
+        finally:
+            if app_state is not None:
+                app_state.grpc_running = False
     except Exception as e:
         logger.error("gRPC server failed to start: %s", e, exc_info=True)
         if app_state is not None:

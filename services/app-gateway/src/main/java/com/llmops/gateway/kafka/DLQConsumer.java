@@ -6,6 +6,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Consumer for the Dead Letter Queue (DLQ) topic: {@code chat-completed.DLT}.
@@ -35,10 +37,17 @@ public class DLQConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(DLQConsumer.class);
 
+    private final MeterRegistry meterRegistry;
+
+    @Autowired
+    public DLQConsumer(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     @KafkaListener(
             topics = "chat-completed.DLT",
             groupId = "dlq-monitoring-group",
-            containerFactory = "kafkaListenerContainerFactory"
+            containerFactory = "dlqContainerFactory"
     )
     public void consume(String rawPayload,
                         @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
@@ -49,8 +58,15 @@ public class DLQConsumer {
                 "exception='{}' payload={}",
                 partition, offset, exceptionMessage, rawPayload);
 
+        meterRegistry.counter("dlq_messages_received_total").increment();
+        
         // Extension point:
         // alertService.sendSlackAlert("DLQ event received", rawPayload);
-        // archiveService.writeToS3("dlq-archive", rawPayload);
+        writeToS3("dlq-archive", rawPayload);
+    }
+
+    private void writeToS3(String bucket, String payload) {
+        log.info("Stub: Archiving DLQ message to S3 bucket [{}]", bucket);
+        // Implementation for S3 upload would go here
     }
 }

@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     triggers {
-        pollSCM('* * * * *')
+        pollSCM('H/5 * * * *')
     }
 
     environment {
@@ -173,8 +173,13 @@ pipeline {
 
                 wait_for_http http://localhost:8089/ready app-gateway
                 
+                TOKEN=$(curl -s -X POST http://localhost:8089/api/auth/login \
+                  -H "Content-Type: application/json" \
+                  -d '{"user_id": "alice", "password": "alice123"}' | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+
                 RESPONSE=$(curl -s -X POST http://localhost:8089/api/chat \
                   -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer $TOKEN" \
                   -d '{"prompt": "How do I reverse a list in Python?", "conversation_id": "sanity-check", "debug": true, "stream": false}')
                   
                 echo "Sanity Check Response: $RESPONSE"

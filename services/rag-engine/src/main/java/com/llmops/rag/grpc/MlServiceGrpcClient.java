@@ -94,6 +94,19 @@ public class MlServiceGrpcClient {
         return Mono.fromCallable(() -> {
             EmbedResponse resp = stub.embed(
                     EmbedRequest.newBuilder().setText(text).build());
+                    
+            if (resp.getEmbeddingBytes() != null && !resp.getEmbeddingBytes().isEmpty()) {
+                byte[] bytes = resp.getEmbeddingBytes().toByteArray();
+                java.nio.FloatBuffer fb = java.nio.ByteBuffer.wrap(bytes)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .asFloatBuffer();
+                List<Double> result = new java.util.ArrayList<>(fb.limit());
+                for (int i = 0; i < fb.limit(); i++) {
+                    result.add((double) fb.get(i));
+                }
+                return result;
+            }
+
             return resp.getEmbeddingList().stream()
                     .map(Float::doubleValue)
                     .toList();

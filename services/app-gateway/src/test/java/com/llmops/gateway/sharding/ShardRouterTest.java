@@ -6,6 +6,9 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.google.common.hash.Hashing;
+import java.nio.charset.StandardCharsets;
+
 public class ShardRouterTest {
 
     private ShardRouter shardRouter;
@@ -27,25 +30,27 @@ public class ShardRouterTest {
         assertEquals(0, shardRouter.getShardIndex(null));
 
         // Test consistent hash modulo 2 routing
-        String userA = "user_A"; // hashCode of user_A is -1186716183
-        int expectedIndexA = Math.abs(userA.hashCode()) % 2;
+        String userA = "user_A";
+        int expectedIndexA = Math.abs(Hashing.murmur3_32_fixed().hashString(userA, StandardCharsets.UTF_8).asInt()) % 2;
         assertEquals(expectedIndexA, shardRouter.getShardIndex(userA));
 
-        String userB = "user_B"; // hashCode of user_B is -1186716182
-        int expectedIndexB = Math.abs(userB.hashCode()) % 2;
+        String userB = "user_B";
+        int expectedIndexB = Math.abs(Hashing.murmur3_32_fixed().hashString(userB, StandardCharsets.UTF_8).asInt()) % 2;
         assertEquals(expectedIndexB, shardRouter.getShardIndex(userB));
     }
 
     @Test
     public void testBindWriteRoute() {
-        String userIdShard0 = "user_1"; // Math.abs("user_1".hashCode()) % 2 = 0
-        String userIdShard1 = "user_2"; // Math.abs("user_2".hashCode()) % 2 = 1
+        String userIdShard0 = "user_1";
+        String userIdShard1 = "user_2";
+        
+        while (shardRouter.getShardIndex(userIdShard0) == shardRouter.getShardIndex(userIdShard1)) {
+             userIdShard1 = userIdShard1 + "_diff";
+        }
 
-        // Verify sharding routing is mapped correctly
         int index0 = shardRouter.getShardIndex(userIdShard0);
         int index1 = shardRouter.getShardIndex(userIdShard1);
 
-        // Assert different shards are selected
         assertNotEquals(index0, index1);
 
         // Bind Shard 0 Write

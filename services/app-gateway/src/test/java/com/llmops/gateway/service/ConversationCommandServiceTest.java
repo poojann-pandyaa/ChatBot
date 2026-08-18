@@ -18,12 +18,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.TransactionStatus;
+import java.util.function.Consumer;
+
 public class ConversationCommandServiceTest {
 
     private ConversationRepository conversationRepository;
     private MessageRepository messageRepository;
     private OutboxEventRepository outboxEventRepository;
     private ShardRouter shardRouter;
+    private TransactionTemplate transactionTemplate;
     private ConversationCommandService conversationCommandService;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
@@ -34,13 +39,21 @@ public class ConversationCommandServiceTest {
         messageRepository = Mockito.mock(MessageRepository.class);
         outboxEventRepository = Mockito.mock(OutboxEventRepository.class);
         shardRouter = Mockito.mock(ShardRouter.class);
+        transactionTemplate = Mockito.mock(TransactionTemplate.class);
+
+        doAnswer(invocation -> {
+            Consumer<TransactionStatus> action = invocation.getArgument(0);
+            action.accept(Mockito.mock(TransactionStatus.class));
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
 
         conversationCommandService = new ConversationCommandService(
                 conversationRepository,
                 messageRepository,
                 outboxEventRepository,
                 objectMapper,
-                shardRouter
+                shardRouter,
+                transactionTemplate
         );
     }
 

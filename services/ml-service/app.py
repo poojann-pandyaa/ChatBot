@@ -93,9 +93,11 @@ class ClassifyResponse(BaseModel):
 
 class EmbedRequest(BaseModel):
     text: str
+    return_bytes: bool = False
 
 class EmbedResponse(BaseModel):
-    embedding: List[float]
+    embedding: Optional[List[float]] = None
+    embedding_bytes: Optional[bytes] = None
 
 class RerankRequest(BaseModel):
     query: str
@@ -183,15 +185,20 @@ async def lifespan(app: FastAPI):
     app.state.load_error = None
     app.state.grpc_running = False
     app.state.grpc_error = None
-    try:
-        _load_models(app_state=app.state)
-        app.state.models_loaded = True
-    except Exception as e:
-        log.error("Model loading failed: %s", e, exc_info=True)
-        _models_load_error = str(e)
-        app.state.load_error = str(e)
-        # Do NOT re-raise — keep the process alive so /health can report the failure
-        # to orchestrators (k8s readiness probe, docker-compose healthcheck).
+    
+    def init_models():
+        try:
+            _load_models(app_state=app.state)
+            app.state.models_loaded = True
+        except Exception as e:
+            log.error("Model loading failed: %s", e, exc_info=True)
+            global _models_load_error
+            _models_load_error = str(e)
+            app.state.load_error = str(e)
+            # Do NOT re-raise — keep the process alive so /health can report the failure
+            # to orchestrators (k8s readiness probe, docker-compose healthcheck).
+
+    threading.Thread(target=init_models, daemon=True, name="model-loader").start()
     yield
     if getattr(app.state, "grpc_server", None):
         await asyncio.to_thread(app.state.grpc_server.stop(grace=15).wait)
@@ -354,8 +361,10 @@ def embed_endpoint(request: EmbedRequest):
             output = embed_model(**encoded)
         emb = output.last_hidden_state[:, 0, :]       # CLS token
         emb = F.normalize(emb, p=2, dim=1)            # L2 normalise
-        vector = emb.cpu().squeeze(0).numpy().astype("float32").tolist()
-        return {"embedding": vector}
+        vector = emb.cpu().squeeze(0).numpy().astype("float32")
+        if request.return_bytes:
+            return {"embedding_bytes": vector.tobytes()}
+        return {"embedding": vector.tolist()}
     except Exception as e:
         log.error("Embed endpoint failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

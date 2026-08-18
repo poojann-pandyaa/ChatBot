@@ -2,6 +2,11 @@ pipeline {
     agent any
     
     stages {
+        stage('Approval') {
+            steps {
+                input message: "Are you sure you want to destroy the infrastructure?", ok: "Destroy"
+            }
+        }
         stage('Orchestrate Teardown via Ansible') {
             steps {
                 sh "ansible-playbook -i ansible/inventory.ini ansible/playbooks/teardown.yml"

@@ -82,3 +82,24 @@ resilience4j:
       ollamaClient:
         maxAttempts: 3
         waitDuration: 1s
+
+rag:
+  quality-gate:
+    thresholds:
+      commonsense: 0.1
+      adaptive: 0.05
+      strategic: 0.02
+  cache:
+    read-thresholds:
+      commonsense: 0.05
+      adaptive: 0.08
+      strategic: 0.08
+      unknown: 0.05
+    ttl-seconds:
+      commonsense: 86400
+      adaptive: 43200
+      strategic: 3600
+      unknown: 86400
+  generator:
+    max-chunk-length: 800
+    max-history-snippet-length: 300

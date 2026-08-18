@@ -4,6 +4,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.google.common.hash.Hashing;
+import java.nio.charset.StandardCharsets;
+
 /**
  * Utility to calculate shard index (hash modulo 2) and bind target
  * read/write route keys to the thread context.
@@ -20,7 +23,8 @@ public class ShardRouter {
         if (userId == null) {
             return 0;
         }
-        int index = Math.abs(userId.hashCode()) % 2;
+        int hash = Hashing.murmur3_32_fixed().hashString(userId, StandardCharsets.UTF_8).asInt();
+        int index = Math.abs(hash) % 2;
         log.debug("UserId {} resolved to shard index {}", userId, index);
         return index;
     }

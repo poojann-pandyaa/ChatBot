@@ -26,6 +26,12 @@ public class GeneratorService {
     @Value("${services.ollama.model:gemma2:2b}")
     private String modelName;
 
+    @Value("${rag.generator.max-chunk-length:800}")
+    private int maxChunkLength;
+
+    @Value("${rag.generator.max-history-snippet-length:300}")
+    private int maxHistorySnippetLength;
+
     @Autowired
     public GeneratorService(OllamaClient ollamaClient) {
         this.ollamaClient = ollamaClient;
@@ -52,9 +58,8 @@ public class GeneratorService {
             boolean isAccepted = isAcc != null && isAcc;
             
             String chunkText = (String) meta.getOrDefault("chunk_text", "");
-            if (chunkText.length() > 800) {
-                chunkText = chunkText.substring(0, 800);
-            }
+            chunkText = truncateToSentence(chunkText, maxChunkLength);
+            
             String domain = (String) meta.getOrDefault("domain", "unknown");
 
             contextParts.add(String.format(
@@ -128,9 +133,8 @@ public class GeneratorService {
         for (ChatMessage msg : history) {
             String role = "user".equalsIgnoreCase(msg.role()) ? "User" : "Assistant";
             String contentSnippet = msg.content().replace("\n", " ");
-            if (contentSnippet.length() > 300) {
-                contentSnippet = contentSnippet.substring(0, 300);
-            }
+            contentSnippet = truncateToSentence(contentSnippet, maxHistorySnippetLength);
+            
             historyText.append(String.format("%s: %s\n", role, contentSnippet));
         }
 
@@ -189,5 +193,29 @@ public class GeneratorService {
                     }
                 })
                 .filter(token -> !token.isEmpty());
+    }
+
+    private String truncateToSentence(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        String truncated = text.substring(0, maxLength);
+        int lastPeriod = truncated.lastIndexOf('.');
+        int lastQuestion = truncated.lastIndexOf('?');
+        int lastExclamation = truncated.lastIndexOf('!');
+        
+        int lastBoundary = Math.max(lastPeriod, Math.max(lastQuestion, lastExclamation));
+        
+        if (lastBoundary > (maxLength / 2)) {
+            return truncated.substring(0, lastBoundary + 1);
+        }
+        
+        // Fallback to space
+        int lastSpace = truncated.lastIndexOf(' ');
+        if (lastSpace > (maxLength / 2)) {
+            return truncated.substring(0, lastSpace) + "...";
+        }
+        
+        return truncated + "...";
     }
 }
