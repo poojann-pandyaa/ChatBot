@@ -210,7 +210,7 @@ public class RouterService {
             }
 
             return mlServiceClient.embed(rewrittenPrompt)
-                    .flatMap(qVector -> checkCache(qVector, "commonsense")
+                    .flatMap(qVector -> checkCache(qVector, "unknown")
                             .map(cacheHit -> {
                                 trace.getRouterDecisions().put("cache_hit", true);
                                 trace.getRouterDecisions().put("path_taken", "cache_hit");
@@ -337,7 +337,7 @@ public class RouterService {
             }
 
             return mlServiceClient.embed(rewrittenPrompt)
-                    .flatMapMany(qVector -> checkCache(qVector, "commonsense")
+                    .flatMapMany(qVector -> checkCache(qVector, "unknown")
                             .flatMapMany(cacheHit -> {
                                 trace.getRouterDecisions().put("cache_hit", true);
                                 trace.getRouterDecisions().put("path_taken", "cache_hit");
