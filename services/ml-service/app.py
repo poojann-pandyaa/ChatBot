@@ -389,8 +389,8 @@ def rerank_endpoint(request: RerankRequest):
 async def health(http_request: Request):
     """Returns service health including model-load status and gRPC facade status.
 
-    HTTP 200 → models loaded (gRPC may still be down, check grpc_running field).
-    HTTP 503 → models not loaded; service is starting or failed to start.
+    HTTP 200 → Both models are loaded and gRPC server is running (Data plane is up).
+    HTTP 503 → Models not loaded OR gRPC server is down (prevents split-brain routing).
     """
     loaded = getattr(http_request.app.state, "models_loaded", False)
     grpc_ok = getattr(http_request.app.state, "grpc_running", False)
