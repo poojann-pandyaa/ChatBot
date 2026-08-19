@@ -301,18 +301,23 @@ def classify_endpoint(request: ClassifyRequest):
         parsed["ambiguity"] = _estimate_ambiguity(query_text)
 
         # Log warning if the model output fails to match format
+        parse_failed = not any(k in response.lower() for k in ("intent:", "reasoning type:", "scope:"))
         if parsed["intent"] == "factual" and parsed["reasoning_type"] == "commonsense" and parsed["scope"] == "single_topic":
-            if not any(k in response.lower() for k in ("intent:", "reasoning type:", "scope:")):
+            if parse_failed:
                 log.warning("Classifier model output did not match expected format. Raw output: %r", response)
 
         keyword_type = _keyword_fallback(query_text)
-        if keyword_type and parsed["reasoning_type"] == "commonsense":
+        if keyword_type and parse_failed:
             parsed["reasoning_type"] = keyword_type
             parsed["scope"] = "multi_topic"
             if len(parsed["sub_questions"]) == 1:
                 parsed["sub_questions"] = _generate_fallback_subquestions(
                     query_text, keyword_type
                 )
+            
+            # Increment fallback counter for Task 3
+            count = getattr(app.state, "fallback_count", 0)
+            app.state.fallback_count = count + 1
 
         return parsed
     except Exception as e:
@@ -382,6 +387,7 @@ async def health(http_request: Request):
         "status": "healthy" if healthy else "unhealthy",
         "models_loaded": loaded,
         "grpc_running": grpc_ok,
+        "fallback_count": getattr(http_request.app.state, "fallback_count", 0)
     }
     if not loaded:
         body["error"] = getattr(http_request.app.state, "load_error", None) or "models not loaded"

@@ -16,7 +16,8 @@ public class MlServiceGrpcClientTest {
 
     @BeforeEach
     public void setup() {
-        client = new MlServiceGrpcClient();
+        io.micrometer.core.instrument.MeterRegistry meterRegistry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        client = new MlServiceGrpcClient(meterRegistry);
         ReflectionTestUtils.setField(client, "mlServiceHost", "localhost");
         ReflectionTestUtils.setField(client, "mlServicePort", 50051);
         client.init(); // Loads the JSON configs

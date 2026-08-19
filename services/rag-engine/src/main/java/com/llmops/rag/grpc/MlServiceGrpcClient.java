@@ -45,6 +45,12 @@ public class MlServiceGrpcClient {
 
     private static final Logger log = LoggerFactory.getLogger(MlServiceGrpcClient.class);
 
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
+    public MlServiceGrpcClient(io.micrometer.core.instrument.MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     @Value("${ml-service.grpc.host:ml-service}")
     private String mlServiceHost;
 
@@ -174,6 +180,9 @@ public class MlServiceGrpcClient {
     public Mono<Map<String, Object>> fallbackClassify(String query, Throwable t) {
         log.warn("Classification fallback triggered: {}", t.getMessage());
         String keywordType = keywordFallback(query);
+        
+        meterRegistry.counter("ml_service_classify_fallback_total", "reasoning_type", keywordType).increment();
+        
         return Mono.just(Map.of(
                 "intent", "factual",
                 "reasoning_type", keywordType,
