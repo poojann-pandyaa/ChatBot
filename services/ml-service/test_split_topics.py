@@ -134,74 +134,44 @@ def test_single_vague_word_no_question_mark():
 
 # ─── Case i ──────────────────────────────────────────────────────────────────
 
-def test_decimal_numbers_false_positive():
+def test_decimal_numbers_do_not_split():
     """
-    i. KNOWN BUG: Declarative query containing decimal numbers is incorrectly
-       split on the decimal points by the regex ``\\d+[\\.\\)]\\s*``.
-
-    The pattern ``\\d+[\\.)]\\s*`` matches e.g. "3." (zero trailing whitespace
-    required), so "GDP grew 3.2 percent" is split at "3." into:
-       ['GDP grew ', '2 percent, inflation hit ']  (and further downstream)
-
-    FALSE-POSITIVE RISK (HIGH): any non-"?" prompt with decimal numbers (e.g.
-    financial data, measurements, version numbers) may be incorrectly flagged as
-    topic_overload.  The regex needs a ``(?<![0-9])`` lookbehind or a
-    ``\\s+`` (one-or-more) trailing-whitespace requirement to be safe, but that
-    fix is explicitly deferred per task instructions.
+    i. Declarative query containing decimal numbers should not be split
+       incorrectly by the list-marker regex.
     """
     query = (
         "GDP grew 3.2 percent, inflation hit 2.1 percent, "
         "unemployment fell to 4.5 percent, and consumer confidence rose 1.8 points"
     )
     topics = _split_topics(query)
-    # Assert the ACTUAL (buggy) current output: 5 segments because the regex
-    # splits on "3.", "2.", "4.", and "1." inside the decimal numbers.
-    assert len(topics) == 5
-    # This IS > TOPIC_OVERLOAD_THRESHOLD (3), so it would incorrectly fire topic_overload
-    assert len(topics) > TOPIC_OVERLOAD_THRESHOLD
+    assert len(topics) == 1
+    assert not (len(topics) > TOPIC_OVERLOAD_THRESHOLD)
 
 
 # ─── Case j ──────────────────────────────────────────────────────────────────
 
 def test_rhetorical_question_in_quotes():
     """
-    j. A sentence with a rhetorical '?' inside quoted speech should ideally resolve
-       to 1 real topic, but currently resolves to 2.
-
-    The function splits blindly on '?' producing:
-      - 'He said "why'       (3 words → survives filter)
-      - '" and walked out.'  (4 words → survives filter)
-
-    This is a known false-positive: the single-sentence input is classified as
-    2 topics instead of 1. Not flagged as overload (2 <= TOPIC_OVERLOAD_THRESHOLD),
-    so it won't trigger a clarification request — but topic segmentation is wrong.
+    j. A sentence with a rhetorical '?' inside quoted speech should resolve
+       to 1 real topic.
     """
     query = 'He said "why?" and walked out.'
     topics = _split_topics(query)
-    # ACTUAL current output: 2 topics (not 1)
-    assert len(topics) == 2
-    # It does NOT breach the overload threshold, at least
+    assert len(topics) == 1
     assert not (len(topics) > TOPIC_OVERLOAD_THRESHOLD)
 
 
 # ─── Case k ──────────────────────────────────────────────────────────────────
 
-def test_terse_one_word_topics_coverage_gap():
+def test_terse_one_word_topics():
     """
-    k. KNOWN COVERAGE GAP: One-word '?'-delimited topics are silently dropped by
-       the >= 2-word filter, so five real distinct questions produce 0 topics.
-
-    This means a prompt like "Cats? Dogs? Birds? Fish? Reptiles?" completely
-    avoids the topic_overload check — a false negative.
-    A fix would require lowering the word filter to >= 1 or using a separate
-    single-word allowlist, but that is out of scope for this task.
+    k. One-word '?'-delimited topics should not be silently dropped.
+       Five real distinct questions should produce 5 topics.
     """
     query = "Cats? Dogs? Birds? Fish? Reptiles?"
     topics = _split_topics(query)
-    # ACTUAL current output: 0 topics (all filtered out)
-    assert len(topics) == 0
-    # Confirm it doesn't accidentally look like overload
-    assert not (len(topics) > TOPIC_OVERLOAD_THRESHOLD)
+    assert len(topics) == 5
+    assert len(topics) > TOPIC_OVERLOAD_THRESHOLD
 
 
 # ─── Runner ───────────────────────────────────────────────────────────────────

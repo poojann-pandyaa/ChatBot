@@ -261,14 +261,22 @@ def _split_topics(query: str) -> list[str]:
       even when they represent real distinct questions (case k in tests).
     """
     if "?" in query:
-        segments = query.split("?")
+        # Fix j: only split on ? followed by whitespace or end-of-string so that
+        # rhetorical ? inside quoted speech (e.g. 'He said "why?" and left.') does
+        # not produce a spurious segment.
+        segments = re.split(r'\?(?=\s|$)', query)
+        min_words = 1  # Fix k: each surviving segment is a genuine question topic
     else:
-        segments = re.split(r'\d+[\.\)]\s*|;', query)
+        # Fix i: (?!\d) negative lookahead prevents splitting on decimal points like
+        # "3.2" — the regex now only matches list markers (digit + dot + space),
+        # not mid-number dots.
+        segments = re.split(r'\d+\.(?!\d)\s*|\d+\)\s*|;', query)
+        min_words = 2  # non-? branch still filters stray/artifact segments
 
     result = []
     for seg in segments:
         cleaned = seg.strip(" ,.-")
-        if len(cleaned.split()) >= 2:
+        if len(cleaned.split()) >= min_words:
             result.append(cleaned)
     return result
 
