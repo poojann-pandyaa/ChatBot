@@ -18,6 +18,7 @@
     <description>App Gateway Service for LLMOps Chatbot Platform</description>
 
     <properties>
+        <testcontainers.version>1.20.1</testcontainers.version>
         <java.version>21</java.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <grpc.version>1.65.0</grpc.version>
@@ -129,6 +130,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Spring Security Crypto for BCrypt -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
         <!-- JWT (JJWT) -->

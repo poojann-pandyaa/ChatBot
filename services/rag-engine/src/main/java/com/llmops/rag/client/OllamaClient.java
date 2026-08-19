@@ -53,7 +53,6 @@ public class OllamaClient {
     }
 
     @CircuitBreaker(name = "ollamaClient", fallbackMethod = "fallbackGenerateStream")
-    @Retry(name = "ollamaClient")
     public Flux<String> generateStream(String prompt) {
         Map<String, Object> body = Map.of(
                 "model", modelName,

@@ -56,6 +56,11 @@ public class ReasoningEngine {
         @SuppressWarnings("unchecked")
         List<String> subQuestions = (List<String>) trace.getClassification().getOrDefault("sub_questions", List.of());
 
+        if (subQuestions.isEmpty()) {
+            log.warn("Adaptive path selected but sub_questions is empty. Falling back to Commonsense Path.");
+            return commonsensePath(trace);
+        }
+
         return Flux.fromIterable(subQuestions)
                 .flatMap(sq -> retrieverService.retrieve(sq, 10)
                         .flatMap(cands -> rerankerService.rerank(sq, cands, 3))
@@ -87,6 +92,7 @@ public class ReasoningEngine {
         List<String> subQuestions = (List<String>) trace.getClassification().getOrDefault("sub_questions", List.of());
 
         Mono<List<Map<String, Object>>> mainRetrieve = retrieverService.retrieve(trace.getQuery(), 10)
+                .flatMap(cands -> rerankerService.rerank(trace.getQuery(), cands, 3))
                 .map(list -> {
                     List<Integer> ids = list.stream().limit(3).map(r -> (Integer) r.get("chunk_id")).toList();
                     trace.getRetrievedPerSubquery().put("level1_main", ids);
@@ -110,11 +116,7 @@ public class ReasoningEngine {
         return Mono.zip(mainRetrieve, subRerank)
                 .map(tuple -> {
                     List<Map<String, Object>> combined = new ArrayList<>();
-                    for (Map<String, Object> c : tuple.getT1()) {
-                        Map<String, Object> copy = new HashMap<>(c);
-                        copy.put("final_score", c.getOrDefault("score", 0.0));
-                        combined.add(copy);
-                    }
+                    combined.addAll(tuple.getT1());
                     combined.addAll(tuple.getT2());
                     trace.setRerankedFinal(deduplicate(combined));
                     return trace;

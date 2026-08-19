@@ -148,14 +148,9 @@ public class ChatController {
                     if (signalType == SignalType.ON_COMPLETE) {
                         String finalAnswer = accumulatedAnswer.toString();
                         Mono.fromRunnable(() -> {
-                            try {
-                                shardRouter.bindWriteRoute(request.userId());
-                                conversationCommandService.saveConversationAndEvent(
-                                        request.conversationId(), title, request.userId(),
-                                        request.prompt(), finalAnswer, "unknown");
-                            } finally {
-                                DataSourceContextHolder.clear();
-                            }
+                            conversationCommandService.saveConversationAndEvent(
+                                    request.conversationId(), title, request.userId(),
+                                    request.prompt(), finalAnswer, "unknown");
                         }).subscribeOn(Schedulers.boundedElastic()).subscribe();
                     }
                 });
@@ -176,14 +171,9 @@ public class ChatController {
                     String reasoningType = (String) res.getOrDefault("reasoning_type", "commonsense");
                     
                     return Mono.fromRunnable(() -> {
-                        try {
-                            shardRouter.bindWriteRoute(request.userId());
                             conversationCommandService.saveConversationAndEvent(
                                     request.conversationId(), title, request.userId(),
                                     request.prompt(), answer, reasoningType);
-                        } finally {
-                            DataSourceContextHolder.clear();
-                        }
                     }).subscribeOn(Schedulers.boundedElastic())
                     .thenReturn(ResponseEntity.ok().body(res));
                 });
@@ -257,7 +247,7 @@ public class ChatController {
                         log.warn("User {} attempted to delete conversation {} without ownership", userId, id);
                         return Mono.just(ResponseEntity.<Void>status(HttpStatus.FORBIDDEN).build());
                     }
-                    return Mono.fromRunnable(() -> conversationListService.deleteConversationInShards(id))
+                    return Mono.fromRunnable(() -> conversationCommandService.deleteConversation(id, userId))
                             .subscribeOn(Schedulers.boundedElastic())
                             .then(redisTemplate.delete("conversation:" + id + ":summary"))
                             .then(Mono.just(ResponseEntity.<Void>noContent().build()));
@@ -271,11 +261,15 @@ public class ChatController {
     @DeleteMapping("/api/conversations")
     public Mono<ResponseEntity<Void>> clearAllConversations(ServerWebExchange exchange) {
         String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
-        return Mono.fromRunnable(() -> conversationListService.deleteAllShards(userId))
+        return Mono.fromCallable(() -> conversationListService.listAllShards(userId))
                 .subscribeOn(Schedulers.boundedElastic())
-                .then(redisTemplate.keys("conversation:*:summary")
-                        .flatMap(key -> redisTemplate.delete(key))
-                        .then())
+                .flatMap(conversations -> Mono.fromRunnable(() -> conversationListService.deleteAllShards(userId))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .then(Flux.fromIterable(conversations)
+                                .map(c -> "conversation:" + c.get("id") + ":summary")
+                                .flatMap(key -> redisTemplate.delete(key))
+                                .then())
+                )
                 .then(Mono.just(ResponseEntity.<Void>noContent().build()));
     }
 

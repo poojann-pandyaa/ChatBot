@@ -99,16 +99,18 @@ public class ConversationCommandService {
      * Deletes a single conversation and all its messages atomically.
      * The Redis summary key is evicted by the caller (ChatController).
      */
-    public void deleteConversation(String conversationId) {
-        // Warning: This does not have userId to bind shard route correctly if the user is not bound beforehand.
-        // Assuming the route is bound by the controller for this operation.
-        transactionTemplate.executeWithoutResult(status -> {
-            log.info("Deleting conversation {} and all its messages...", conversationId);
-            messageRepository.deleteByConversationId(conversationId);
-            conversationRepository.deleteById(conversationId);
-            log.info("Deleted conversation {}.", conversationId);
-        });
-        DataSourceContextHolder.clear();
+    public void deleteConversation(String conversationId, String userId) {
+        shardRouter.bindWriteRoute(userId);
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                log.info("Deleting conversation {} and all its messages for user {}...", conversationId, userId);
+                messageRepository.deleteByConversationId(conversationId);
+                conversationRepository.deleteById(conversationId);
+                log.info("Deleted conversation {}.", conversationId);
+            });
+        } finally {
+            DataSourceContextHolder.clear();
+        }
     }
 
     /**

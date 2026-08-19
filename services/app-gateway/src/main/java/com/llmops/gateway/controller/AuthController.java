@@ -3,6 +3,7 @@ package com.llmops.gateway.controller;
 import com.llmops.gateway.security.JwtService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,7 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.HashMap;
 
 /**
  * Handles user authentication. Issues signed JWT tokens.
@@ -25,17 +27,16 @@ import java.util.Map;
 @RequestMapping("/api/auth")
 public class AuthController {
 
-    // Hardcoded demo user credentials: username → password
-    private static final Map<String, String> USERS = Map.of(
-            "alice", "alice123",
-            "bob",   "bob123",
-            "admin", "admin123"
-    );
-
     private final JwtService jwtService;
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final Map<String, String> users = new HashMap<>();
 
     public AuthController(JwtService jwtService) {
         this.jwtService = jwtService;
+        // Dynamically encode for demo purposes since we don't have a DB
+        this.users.put("alice", passwordEncoder.encode("alice123"));
+        this.users.put("bob", passwordEncoder.encode("bob123"));
+        this.users.put("admin", passwordEncoder.encode("admin123"));
     }
 
     /**
@@ -55,8 +56,9 @@ public class AuthController {
                     .<Map<String, Object>>body(Map.of("error", "user_id and password are required")));
         }
 
-        String expectedPassword = USERS.get(userId);
-        if (expectedPassword == null || !expectedPassword.equals(password)) {
+        String expectedPasswordHash = users.get(userId);
+        
+        if (expectedPasswordHash == null || !passwordEncoder.matches(password, expectedPasswordHash)) {
             return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .<Map<String, Object>>body(Map.of("error", "Invalid credentials")));
         }

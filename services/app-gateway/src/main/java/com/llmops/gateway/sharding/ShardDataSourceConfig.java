@@ -64,6 +64,7 @@ public class ShardDataSourceConfig {
 
         ShardRoutingDataSource routingDataSource = new ShardRoutingDataSource();
         routingDataSource.setTargetDataSources(targetDataSources);
+        routingDataSource.setDefaultTargetDataSource(shard0Write);
         routingDataSource.afterPropertiesSet();
 
         log.info("Routing DataSource initialized successfully with 4 targets.");

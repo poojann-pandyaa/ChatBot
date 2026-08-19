@@ -5,6 +5,7 @@ import com.llmops.gateway.entity.OutboxEvent;
 import com.llmops.gateway.kafka.ChatCompletedEvent;
 import com.llmops.gateway.kafka.ChatEventProducer;
 import com.llmops.gateway.repository.OutboxEventRepository;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -75,6 +76,22 @@ public class OutboxPoller {
                     com.llmops.gateway.sharding.DataSourceContextHolder.clear();
                 }
             });
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down OutboxPoller executor service...");
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                log.warn("Executor service did not terminate in the specified time.");
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            log.warn("Executor service shutdown interrupted.");
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
