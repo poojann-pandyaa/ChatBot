@@ -59,6 +59,10 @@ public class MlServiceGrpcClient {
         log.info("MlServiceGrpcClient connected to {}:{}", mlServiceHost, mlServicePort);
     }
 
+    public ManagedChannel getChannel() {
+        return channel;
+    }
+
     @PreDestroy
     public void shutdown() throws InterruptedException {
         if (channel != null) {
