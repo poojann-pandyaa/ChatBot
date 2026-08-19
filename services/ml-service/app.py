@@ -47,36 +47,19 @@ Intent:"""
 VALID_REASONING_TYPES = {"commonsense", "adaptive", "strategic"}
 VALID_INTENTS = {"factual", "procedural", "comparative", "conceptual", "opinion", "debugging"}
 
-STRATEGIC_VS_PATTERNS = [
-    " vs ",
-    " versus ",
-    " or ",
-    "which is better",
-    "which should i choose",
-    "pros and cons of",
-    "tradeoffs between",
-    "compare and contrast",
-]
+import json
 
-STRATEGIC_NOUN_PAIRS = [
-    ("tcp", "udp"),
-    ("sql", "nosql"),
-    ("multiprocessing", "multithreading"),
-    ("process", "thread"),
-    ("rest", "graphql"),
-    ("docker", "kubernetes"),
-    ("redis", "memcached"),
-]
+config_path = "/configs/classifier_rules.json"
+if not os.path.exists(config_path):
+    config_path = os.path.join(os.path.dirname(__file__), "../../configs/classifier_rules.json")
 
-ADAPTIVE_EXPLAIN_SIGNALS = [
-    "what is", "explain", "how does", "what are", "describe", "define",
-    "difference between",
-]
-ADAPTIVE_USAGE_SIGNALS = [
-    "when should", "when to use", "and when", "and how", "how to use",
-    "and why", "should i use", "when do i", "which is faster", "which is better",
-    "how do i implement", "how to implement",
-]
+with open(config_path, "r") as f:
+    rules = json.load(f)
+
+STRATEGIC_VS_PATTERNS = rules["strategic_vs_patterns"]
+STRATEGIC_NOUN_PAIRS = [tuple(pair) for pair in rules["strategic_noun_pairs"]]
+ADAPTIVE_EXPLAIN_SIGNALS = rules["adaptive_explain_signals"]
+ADAPTIVE_USAGE_SIGNALS = rules["adaptive_usage_signals"]
 
 # Pydantic models for request/response
 class ClassifyRequest(BaseModel):

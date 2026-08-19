@@ -23,7 +23,13 @@ import reactor.core.scheduler.Schedulers;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.io.File;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * gRPC client for the ml-service.
@@ -48,6 +54,12 @@ public class MlServiceGrpcClient {
     private ManagedChannel channel;
     private MlServiceGrpc.MlServiceBlockingStub stub;
 
+    private List<String> strategicPatterns = new ArrayList<>();
+    private List<String[]> strategicNounPairs = new ArrayList<>();
+    private List<String> adaptiveExplain = new ArrayList<>();
+    private List<String> adaptiveUsage = new ArrayList<>();
+    private Pattern orPattern = Pattern.compile("\\b\\w+\\s+or\\s+\\w+\\b");
+
     @PostConstruct
     public void init() {
         channel = ManagedChannelBuilder.forAddress(mlServiceHost, mlServicePort)
@@ -57,6 +69,29 @@ public class MlServiceGrpcClient {
                 .build();
         stub = MlServiceGrpc.newBlockingStub(channel);
         log.info("MlServiceGrpcClient connected to {}:{}", mlServiceHost, mlServicePort);
+
+        try {
+            File configFile = new File("/configs/classifier_rules.json");
+            if (!configFile.exists()) {
+                configFile = new File("../../configs/classifier_rules.json");
+            }
+            if (!configFile.exists()) {
+                configFile = new File("configs/classifier_rules.json");
+            }
+            if (configFile.exists()) {
+                ObjectMapper mapper = new ObjectMapper();
+                JsonNode root = mapper.readTree(configFile);
+                root.get("strategic_vs_patterns").forEach(n -> strategicPatterns.add(n.asText()));
+                root.get("strategic_noun_pairs").forEach(n -> strategicNounPairs.add(new String[]{n.get(0).asText(), n.get(1).asText()}));
+                root.get("adaptive_explain_signals").forEach(n -> adaptiveExplain.add(n.asText()));
+                root.get("adaptive_usage_signals").forEach(n -> adaptiveUsage.add(n.asText()));
+                log.info("Loaded classifier rules from {}", configFile.getAbsolutePath());
+            } else {
+                log.error("Could not find classifier_rules.json");
+            }
+        } catch (Exception e) {
+            log.error("Failed to load classifier rules", e);
+        }
     }
 
     public ManagedChannel getChannel() {
@@ -163,24 +198,21 @@ public class MlServiceGrpcClient {
 
     private String keywordFallback(String query) {
         String q = query.toLowerCase().trim();
-        List<String> strategicPatterns = List.of(
-                " vs ", " versus ", " or ", "which is better",
-                "which should i choose", "pros and cons of",
-                "tradeoffs between", "compare and contrast"
-        );
-        for (String pattern : strategicPatterns) {
-            if (q.contains(pattern)) return "strategic";
+        for (String[] pair : strategicNounPairs) {
+            if (q.contains(pair[0]) && q.contains(pair[1])) {
+                return "strategic";
+            }
         }
-        List<String> adaptiveExplain = List.of(
-                "what is", "explain", "how does", "what are",
-                "describe", "define", "difference between"
-        );
-        List<String> adaptiveUsage = List.of(
-                "when should", "when to use", "and when", "and how",
-                "how to use", "and why", "should i use", "when do i",
-                "which is faster", "which is better", "how do i implement",
-                "how to implement"
-        );
+        for (String pattern : strategicPatterns) {
+            if (q.contains(pattern)) {
+                if (pattern.equals(" or ")) {
+                    Matcher m = orPattern.matcher(q);
+                    if (m.find()) return "strategic";
+                } else {
+                    return "strategic";
+                }
+            }
+        }
         boolean hasExplain = adaptiveExplain.stream().anyMatch(q::contains);
         boolean hasUsage = adaptiveUsage.stream().anyMatch(q::contains);
         return (hasExplain && hasUsage) ? "adaptive" : "commonsense";

@@ -1,0 +1,22 @@
+[
+  {"query": "What is docker?", "expected": "commonsense"},
+  {"query": "docker vs kubernetes", "expected": "strategic"},
+  {"query": "is docker or kubernetes better", "expected": "strategic"},
+  {"query": "what is docker and when should I use it", "expected": "adaptive"},
+  {"query": "what is the difference between tcp and udp", "expected": "strategic"},
+  {"query": "should I use sql or nosql", "expected": "strategic"},
+  {"query": "pros and cons of multiprocessing vs multithreading", "expected": "strategic"},
+  {"query": "how to implement rest in java", "expected": "commonsense"},
+  {"query": "explain graphql and how to use it", "expected": "adaptive"},
+  {"query": "process thread", "expected": "strategic"},
+  {"query": "compare and contrast redis and memcached", "expected": "strategic"},
+  {"query": "what are the tradeoffs between sql and nosql", "expected": "strategic"},
+  {"query": "define polymorphism", "expected": "commonsense"},
+  {"query": "describe encapsulation and why should i use it", "expected": "adaptive"},
+  {"query": "tcp udp difference", "expected": "strategic"},
+  {"query": "which is faster, python or java", "expected": "strategic"},
+  {"query": "when do i use inheritance", "expected": "commonsense"},
+  {"query": "how does garbage collection work and when to use it", "expected": "adaptive"},
+  {"query": "i like cheese", "expected": "commonsense"},
+  {"query": "which should i choose, aws or gcp", "expected": "strategic"}
+]

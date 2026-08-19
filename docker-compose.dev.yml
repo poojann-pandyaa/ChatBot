@@ -147,6 +147,8 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+    volumes:
+      - ./configs:/configs
 
   rag-engine:
     build:
@@ -171,6 +173,8 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-SuperSecureRedisPassword123}
       - GRPC_SERVER_PORT=9091
+    volumes:
+      - ./configs:/configs
     depends_on:
       qdrant:
         condition: service_started

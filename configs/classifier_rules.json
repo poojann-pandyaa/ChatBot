@@ -1,0 +1,30 @@
+{
+  "strategic_vs_patterns": [
+    " vs ",
+    " versus ",
+    " or ",
+    "which is better",
+    "which should i choose",
+    "pros and cons of",
+    "tradeoffs between",
+    "compare and contrast"
+  ],
+  "strategic_noun_pairs": [
+    ["tcp", "udp"],
+    ["sql", "nosql"],
+    ["multiprocessing", "multithreading"],
+    ["process", "thread"],
+    ["rest", "graphql"],
+    ["docker", "kubernetes"],
+    ["redis", "memcached"]
+  ],
+  "adaptive_explain_signals": [
+    "what is", "explain", "how does", "what are", "describe", "define",
+    "difference between"
+  ],
+  "adaptive_usage_signals": [
+    "when should", "when to use", "and when", "and how", "how to use",
+    "and why", "should i use", "when do i", "which is faster", "which is better",
+    "how do i implement", "how to implement"
+  ]
+}
