@@ -245,7 +245,19 @@ public class RouterService {
                                     includeTrace ? trace.toMap() : null
                             );
                         })
-                        .switchIfEmpty(Mono.defer(() -> reasoningEngine.execute(trace)
+                        .switchIfEmpty(Mono.defer(() -> {
+                            String ambiguity = (String) classification.getOrDefault("ambiguity", "low");
+                            if ("high".equals(ambiguity)) {
+                                trace.getRouterDecisions().put("path_taken", "clarification_requested");
+                                String clarifyingQuestion = "Could you please clarify or provide more context for \"" + rewrittenPrompt + "\"? I need a bit more detail to give a good answer.";
+                                return Mono.just(new ChatResponse(
+                                        clarifyingQuestion,
+                                        reasoningType,
+                                        List.of(),
+                                        includeTrace ? trace.toMap() : null
+                                ));
+                            }
+                            return reasoningEngine.execute(trace)
                                 .flatMap(engineTrace -> {
                                     QualityGateService.QualityGateResult qgResult = qualityGateService.evaluate(engineTrace.getRerankedFinal(), reasoningType);
                                     trace.getRouterDecisions().put("quality_score", qgResult.averageScore());
@@ -321,8 +333,8 @@ public class RouterService {
                                                     ));
                                                 });
                                     });
-                                })
-                        ));
+                                });
+                        }));
             });
         });
     }
@@ -380,7 +392,23 @@ public class RouterService {
 
                             return Flux.just(traceLine, tokenLine);
                         })
-                        .switchIfEmpty(Flux.defer(() -> reasoningEngine.execute(trace)
+                        .switchIfEmpty(Flux.defer(() -> {
+                            String ambiguity = (String) classification.getOrDefault("ambiguity", "low");
+                            if ("high".equals(ambiguity)) {
+                                trace.getRouterDecisions().put("path_taken", "clarification_requested");
+                                String clarifyingQuestion = "Could you please clarify or provide more context for \"" + rewrittenPrompt + "\"? I need a bit more detail to give a good answer.";
+                                
+                                Map<String, Object> tracePayload = Map.of(
+                                        "reasoning_type", reasoningType,
+                                        "sub_questions", classification.getOrDefault("sub_questions", List.of()),
+                                        "sources", List.of(),
+                                        "router_decisions", trace.getRouterDecisions()
+                                );
+                                String traceLine = serializeJson(Map.of("type", "trace", "data", tracePayload)) + "\n";
+                                String tokenLine = serializeJson(Map.of("type", "token", "data", clarifyingQuestion)) + "\n";
+                                return Flux.just(traceLine, tokenLine);
+                            }
+                            return reasoningEngine.execute(trace)
                                 .flatMapMany(engineTrace -> {
                                     QualityGateService.QualityGateResult qgResult = qualityGateService.evaluate(engineTrace.getRerankedFinal(), reasoningType);
                                     trace.getRouterDecisions().put("quality_score", qgResult.averageScore());
@@ -460,8 +488,8 @@ public class RouterService {
 
                                         return Flux.concat(Flux.just(traceLine), tokensFlux);
                                     });
-                                })
-                        ));
+                                });
+                        }));
             });
         });
     }
