@@ -46,6 +46,7 @@ Intent:"""
 
 VALID_REASONING_TYPES = {"commonsense", "adaptive", "strategic"}
 VALID_INTENTS = {"factual", "procedural", "comparative", "conceptual", "opinion", "debugging"}
+TOPIC_OVERLOAD_THRESHOLD = 3
 
 import json
 
@@ -241,6 +242,37 @@ def _extract_entities_heuristic(query: str) -> list[str]:
     return [e for e in entities if not (e in seen or seen.add(e))]
 
 
+def _split_topics(query: str) -> list[str]:
+    """Split a query into distinct topic segments for topic-overload detection.
+
+    Two branches:
+    - If the query contains "?", split on "?" (question-delimited).
+    - Otherwise, split on numbered-list markers (``\\d+[.)]\\s*``) or semicolons.
+
+    Each segment is stripped of leading/trailing " ,.-" and kept only if it
+    contains >= 2 words.
+
+    Known limitations (see test_split_topics.py for details):
+    - Decimal numbers (e.g. "3.2") can trigger false splits in the non-"?" branch
+      because ``\\d+[.]\\s*`` matches "3." with zero trailing whitespace.
+    - A single sentence containing a rhetorical "?" in quoted speech will produce
+      two segments instead of one (case j in tests).
+    - One-word topics ("Cats? Dogs?") are silently dropped by the >= 2-word filter
+      even when they represent real distinct questions (case k in tests).
+    """
+    if "?" in query:
+        segments = query.split("?")
+    else:
+        segments = re.split(r'\d+[\.\)]\s*|;', query)
+
+    result = []
+    for seg in segments:
+        cleaned = seg.strip(" ,.-")
+        if len(cleaned.split()) >= 2:
+            result.append(cleaned)
+    return result
+
+
 def _estimate_ambiguity(query: str) -> str:
     vague_markers = ["it", "this", "that", "thing", "stuff", "somehow"]
     word_count = len(query.split())
@@ -319,17 +351,26 @@ def classify_endpoint(request: ClassifyRequest):
             count = getattr(app.state, "fallback_count", 0)
             app.state.fallback_count = count + 1
 
+        # Topic-overload detection: if the query bundles too many unrelated questions,
+        # short-circuit with a scope=topic_overload so the Java router requests clarification.
+        topics = _split_topics(query_text)
+        if len(topics) > TOPIC_OVERLOAD_THRESHOLD:
+            parsed["scope"] = "topic_overload"
+            parsed["sub_questions"] = topics
+            log.info("Topic overload detected (%d topics): %r", len(topics), query_text)
+
         return parsed
     except Exception as e:
         log.error("Classification endpoint failed: %s", e, exc_info=True)
         keyword_type = _keyword_fallback(query_text) or "commonsense"
+        topics = _split_topics(query_text)
         return {
             "intent": "factual",
             "reasoning_type": keyword_type,
             "entities": _extract_entities_heuristic(query_text),
-            "scope": "multi_topic" if keyword_type != "commonsense" else "single_topic",
+            "scope": "topic_overload" if len(topics) > TOPIC_OVERLOAD_THRESHOLD else ("multi_topic" if keyword_type != "commonsense" else "single_topic"),
             "ambiguity": _estimate_ambiguity(query_text),
-            "sub_questions": [query_text],
+            "sub_questions": topics if len(topics) > TOPIC_OVERLOAD_THRESHOLD else [query_text],
         }
 
 
