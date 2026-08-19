@@ -100,7 +100,7 @@ public class ReasoningController {
 
         Mono<Boolean> mlServicePing = Mono.fromCallable(() -> {
             try {
-                return mlServiceGrpcClient.getChannel().getState(false) == ConnectivityState.READY;
+                return mlServiceGrpcClient.getChannel().getState(true) == ConnectivityState.READY;
             } catch (Exception e) {
                 return false;
             }

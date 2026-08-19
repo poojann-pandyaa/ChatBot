@@ -113,7 +113,7 @@ public class ReasoningControllerTest {
         when(qdrantResponseSpec.toBodilessEntity()).thenReturn(Mono.just(ResponseEntity.ok().build()));
         when(esResponseSpec.toBodilessEntity()).thenReturn(Mono.just(ResponseEntity.ok().build()));
         when(redisConnection.ping()).thenReturn(Mono.just("PONG"));
-        when(grpcChannel.getState(false)).thenReturn(ConnectivityState.READY);
+        when(grpcChannel.getState(true)).thenReturn(ConnectivityState.READY);
 
         webTestClient.get().uri("/ready")
                 .exchange()
@@ -132,7 +132,7 @@ public class ReasoningControllerTest {
         when(qdrantResponseSpec.toBodilessEntity()).thenReturn(Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
         when(esResponseSpec.toBodilessEntity()).thenReturn(Mono.just(ResponseEntity.ok().build()));
         when(redisConnection.ping()).thenReturn(Mono.just("PONG"));
-        when(grpcChannel.getState(false)).thenReturn(ConnectivityState.READY);
+        when(grpcChannel.getState(true)).thenReturn(ConnectivityState.READY);
 
         webTestClient.get().uri("/ready")
                 .exchange()
