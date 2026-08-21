@@ -1,6 +1,6 @@
 # ChatBot MLOps
 
-A production-grade AI chat system built on a **RAG (Retrieval-Augmented Generation)** pipeline with full MLOps infrastructure. Users ask questions and receive answers grounded in a Stack Overflow Q&A knowledge base, with streaming and multi-step reasoning support.
+A production-grade AI chat system built on a **RAG (Retrieval-Augmented Generation)** pipeline with full MLOps infrastructure. Users ask questions and receive answers grounded in a Stack Overflow Q&A knowledge base, with streaming and multi-step reasoning support
 
 ---
 
