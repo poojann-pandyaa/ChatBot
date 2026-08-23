@@ -157,10 +157,14 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Rate limiting (Bucket4j) -->
         <dependency>
             <groupId>com.bucket4j</groupId>
             <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-redis</artifactId>
             <version>8.10.1</version>
         </dependency>
 

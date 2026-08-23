@@ -78,6 +78,15 @@ services:
   rag-engine:
     url: ${RAG_ENGINE_URL:http://localhost:8000}
 
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+rate-limit:
+  chat:
+    requests-per-minute: ${RATE_LIMIT_CHAT_RPM:20}
+    burst-capacity: ${RATE_LIMIT_CHAT_BURST:20}
+  auth:
+    requests-per-minute: ${RATE_LIMIT_AUTH_RPM:5}
+    burst-capacity: ${RATE_LIMIT_AUTH_BURST:5}
+
 resilience4j:
   circuitbreaker:
     instances:
