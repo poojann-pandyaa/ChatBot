@@ -108,7 +108,7 @@ class RateLimitFilterTest {
     }
 
     private MockServerWebExchange createAuthExchange(String ipAddress) {
-        MockServerHttpRequest request = MockServerHttpRequest.post("/api/auth")
+        MockServerHttpRequest request = MockServerHttpRequest.post("/api/auth/login")
                 .remoteAddress(new java.net.InetSocketAddress(ipAddress, 8080))
                 .build();
         return MockServerWebExchange.from(request);

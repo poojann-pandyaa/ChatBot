@@ -2,11 +2,11 @@ package com.llmops.gateway.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.bucket4j.Bandwidth;
-import io.github.bucket4j.Bucket;
 import io.github.bucket4j.BucketConfiguration;
 import io.github.bucket4j.ConsumptionProbe;
+import io.github.bucket4j.distributed.AsyncBucketProxy;
 import io.github.bucket4j.distributed.ExpirationAfterWriteStrategy;
-import io.github.bucket4j.distributed.proxy.ProxyManager;
+import io.github.bucket4j.distributed.proxy.AsyncProxyManager;
 import io.github.bucket4j.redis.lettuce.cas.LettuceBasedProxyManager;
 import io.lettuce.core.RedisClient;
 import org.slf4j.Logger;
@@ -27,6 +27,7 @@ import reactor.core.publisher.Mono;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * WebFilter that applies rate limiting using Redis-backed Bucket4j.
@@ -42,7 +43,7 @@ public class RateLimitFilter implements WebFilter {
     private static final String RATE_LIMITED_AUTH_PATH = "/api/auth";
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final ProxyManager<byte[]> proxyManager;
+    private final AsyncProxyManager<byte[]> proxyManager;
 
     @Value("${rate-limit.chat.requests-per-minute:20}")
     private int chatRequestsPerMinute;
@@ -62,7 +63,8 @@ public class RateLimitFilter implements WebFilter {
         
         this.proxyManager = LettuceBasedProxyManager.builderFor(redisClient)
                 .withExpirationStrategy(ExpirationAfterWriteStrategy.basedOnTimeForRefillingBucketUpToMax(Duration.ofMinutes(1)))
-                .build();
+                .build()
+                .asAsync();
     }
 
     @Override
@@ -74,7 +76,7 @@ public class RateLimitFilter implements WebFilter {
             if (userId != null) {
                 return applyRateLimit(exchange, chain, "chat:" + userId, chatRequestsPerMinute, chatBurstCapacity, "User '" + userId + "'");
             }
-        } else if (RATE_LIMITED_AUTH_PATH.equals(path)) {
+        } else if (path.startsWith(RATE_LIMITED_AUTH_PATH)) {
             String clientIp = "unknown";
             if (exchange.getRequest().getRemoteAddress() != null) {
                 clientIp = exchange.getRequest().getRemoteAddress().getAddress().getHostAddress();
@@ -86,28 +88,30 @@ public class RateLimitFilter implements WebFilter {
     }
 
     private Mono<Void> applyRateLimit(ServerWebExchange exchange, WebFilterChain chain, String key, int rpm, int burst, String identifierLog) {
-        Bucket bucket = proxyManager.builder().build(key.getBytes(StandardCharsets.UTF_8), () -> createBucketConfig(rpm, burst));
-        ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+        AsyncBucketProxy bucket = proxyManager.builder().build(key.getBytes(StandardCharsets.UTF_8), () -> CompletableFuture.completedFuture(createBucketConfig(rpm, burst)));
         
-        long remaining = probe.getRemainingTokens();
-        // Prompt requested: X-RateLimit-Reset (seconds until next refill)
-        long resetSeconds = probe.getNanosToWaitForReset() / 1_000_000_000L;
-        
-        exchange.getResponse().getHeaders().set("X-RateLimit-Limit", String.valueOf(burst));
-        exchange.getResponse().getHeaders().set("X-RateLimit-Remaining", String.valueOf(remaining));
-        exchange.getResponse().getHeaders().set("X-RateLimit-Reset", String.valueOf(resetSeconds));
+        return Mono.fromCompletionStage(bucket.tryConsumeAndReturnRemaining(1))
+                .flatMap(probe -> {
+                    long remaining = probe.getRemainingTokens();
+                    // Prompt requested: X-RateLimit-Reset (seconds until next refill)
+                    long resetSeconds = probe.getNanosToWaitForReset() / 1_000_000_000L;
+                    
+                    exchange.getResponse().getHeaders().set("X-RateLimit-Limit", String.valueOf(burst));
+                    exchange.getResponse().getHeaders().set("X-RateLimit-Remaining", String.valueOf(remaining));
+                    exchange.getResponse().getHeaders().set("X-RateLimit-Reset", String.valueOf(resetSeconds));
 
-        if (probe.isConsumed()) {
-            return chain.filter(exchange);
-        }
+                    if (probe.isConsumed()) {
+                        return chain.filter(exchange);
+                    }
 
-        long waitForRefillSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000L;
-        if (waitForRefillSeconds == 0) {
-            waitForRefillSeconds = 1;
-        }
+                    long waitForRefillSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000L;
+                    if (waitForRefillSeconds == 0) {
+                        waitForRefillSeconds = 1;
+                    }
 
-        log.warn("Rate limit exceeded for {}. Key: {}", identifierLog, key);
-        return writeTooManyRequests(exchange, identifierLog, rpm, waitForRefillSeconds);
+                    log.warn("Rate limit exceeded for {}. Key: {}", identifierLog, key);
+                    return writeTooManyRequests(exchange, identifierLog, rpm, waitForRefillSeconds);
+                });
     }
 
     private BucketConfiguration createBucketConfig(int requestsPerMinute, int burstCapacity) {
