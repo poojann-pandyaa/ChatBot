@@ -24,6 +24,15 @@ import ml_service_pb2_grpc
 
 logger = logging.getLogger(__name__)
 
+# Fast-fail startup check: Ensure protobufs are up-to-date and have embedding_bytes
+if 'embedding_bytes' not in ml_service_pb2.EmbedResponse.DESCRIPTOR.fields_by_name:
+    error_msg = (
+        "CRITICAL: Protobuf mismatch detected! "
+        "The compiled ml_service_pb2.py is missing the 'embedding_bytes' field on EmbedResponse. "
+        "Please regenerate the protobuf stubs using grpcio-tools."
+    )
+    logger.error(error_msg)
+    raise RuntimeError(error_msg)
 
 class MlServiceServicer(ml_service_pb2_grpc.MlServiceServicer):
     """gRPC facade: delegates every RPC to the existing endpoint functions."""

@@ -120,11 +120,23 @@ public class MlServiceGrpcClient {
         return Mono.fromCallable(() -> {
             ClassifyResponse resp = stub.classify(
                     ClassifyRequest.newBuilder().setQuery(query).build());
+            
+            String reasoningType = resp.getReasoningType();
+            String scope = resp.getScope();
+            
+            // If the ML model defaulted to commonsense, run our Regex heuristics as an override
+            if ("commonsense".equals(reasoningType)) {
+                reasoningType = keywordFallback(query);
+                if (!"commonsense".equals(reasoningType)) {
+                    scope = "multi_topic";
+                }
+            }
+            
             return (Map<String, Object>) Map.of(
                     "intent", resp.getIntent(),
-                    "reasoning_type", resp.getReasoningType(),
+                    "reasoning_type", reasoningType,
                     "entities", resp.getEntitiesList(),
-                    "scope", resp.getScope(),
+                    "scope", scope,
                     "ambiguity", resp.getAmbiguity(),
                     "sub_questions", resp.getSubQuestionsList()
             );
@@ -224,6 +236,6 @@ public class MlServiceGrpcClient {
         }
         boolean hasExplain = adaptiveExplain.stream().anyMatch(q::contains);
         boolean hasUsage = adaptiveUsage.stream().anyMatch(q::contains);
-        return (hasExplain && hasUsage) ? "adaptive" : "commonsense";
+        return (hasExplain || hasUsage) ? "adaptive" : "commonsense";
     }
 }

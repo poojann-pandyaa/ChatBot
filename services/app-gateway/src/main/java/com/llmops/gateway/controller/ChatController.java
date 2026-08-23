@@ -322,7 +322,12 @@ public class ChatController {
 
         Mono<Boolean> dbPing = Mono.fromCallable(() -> {
             try {
-                return conversationRepository.count() >= 0;
+                DataSourceContextHolder.setRoute(DataSourceContextHolder.RouteKey.SHARD_0_READ);
+                try {
+                    return conversationRepository.count() >= 0;
+                } finally {
+                    DataSourceContextHolder.clear();
+                }
             } catch (Exception e) {
                 return false;
             }

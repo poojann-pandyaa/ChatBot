@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY services/ml-service/requirements.txt .
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 RUN pip install --no-cache-dir "accelerate>=0.27.2"
 
@@ -29,7 +29,10 @@ CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); \
 print('All models downloaded successfully.') \
 "
 
-COPY . .
+COPY proto /app/proto
+RUN python3 -m grpc_tools.protoc --proto_path=/app/proto --python_out=/app --grpc_python_out=/app /app/proto/ml_service.proto
+
+COPY services/ml-service /app
 
 EXPOSE 8000
 

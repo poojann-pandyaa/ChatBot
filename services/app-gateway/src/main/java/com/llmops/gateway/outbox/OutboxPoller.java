@@ -65,7 +65,7 @@ public class OutboxPoller {
                         try {
                             pollAndPublishForCurrentRoute(currentShard);
                         } finally {
-                            jdbcTemplate.update("SELECT pg_advisory_unlock(?)", 42000 + currentShard);
+                            jdbcTemplate.queryForObject("SELECT pg_advisory_unlock(?)", Boolean.class, 42000 + currentShard);
                         }
                     } else {
                         log.debug("Could not acquire advisory lock for shard {}. Skipping cycle.", currentShard);

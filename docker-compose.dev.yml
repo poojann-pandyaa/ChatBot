@@ -131,8 +131,8 @@ services:
 
   ml-service:
     build:
-      context: ./services/ml-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/ml-service/Dockerfile
     container_name: ml-service-dev
     ports:
       - "8001:8000"  # FastAPI REST
@@ -143,7 +143,7 @@ services:
       - TRANSFORMERS_OFFLINE=0
       - GRPC_PORT=50051
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -166,9 +166,9 @@ services:
       - OLLAMA_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=gemma2:2b
       - OLLAMA_NUM_PARALLEL=4
-      - ML_SERVICE_URL=http://ml-service:8000
-      - ML_SERVICE_GRPC_HOST=ml-service
-      - ML_SERVICE_GRPC_PORT=50051
+      - ML_SERVICE_URL=http://host.docker.internal:8005
+      - ML_SERVICE_GRPC_HOST=host.docker.internal
+      - ML_SERVICE_GRPC_PORT=50055
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-SuperSecureRedisPassword123}
@@ -180,10 +180,8 @@ services:
         condition: service_started
       elasticsearch:
         condition: service_healthy
-      ml-service:
-        condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8000/ready > /dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -220,7 +218,7 @@ services:
       postgres-replica:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/ready"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/ready > /dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5

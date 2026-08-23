@@ -40,8 +40,8 @@ async def embed_batch_api(ml_url, texts, concurrency_limit=10):
         embeddings = await asyncio.gather(*tasks)
         return embeddings
 
-async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batch_size):
-    print(f"Reading & chunking dataset from {data_path} (limit={limit})...")
+async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batch_size, offset=0, append=False):
+    print(f"Reading & chunking dataset from {data_path} (limit={limit}, offset={offset})...")
     if not os.path.exists(data_path):
         alt_path = os.path.join(os.path.dirname(__file__), "../../", data_path)
         if os.path.exists(alt_path):
@@ -55,6 +55,7 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
 
     chunks = []
     metadata = []
+    skipped = 0
 
     with open(data_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -82,6 +83,10 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
             )[:MAX_ANSWERS]
 
             for ans in good:
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                    
                 if limit and len(chunks) >= limit:
                     break
                     
@@ -89,7 +94,7 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
                 chunk_text = f"Q: {title}\nA: {body}"[:MAX_CHUNK_LEN]
                 chunks.append(chunk_text)
                 metadata.append({
-                    "chunk_id": len(chunks) - 1,
+                    "chunk_id": offset + len(chunks) - 1, # Offset chunk ID so they don't overwrite
                     "question_id": q_id,
                     "score": ans.get("score", ans.get("pm_score", 0)),
                     "is_accepted": ans.get("is_accepted", False),
@@ -99,7 +104,7 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
                 })
 
     total = len(chunks)
-    print(f"Total chunks chunked: {total}")
+    print(f"Total chunks chunked in this run: {total}")
     if total == 0:
         print("No chunks. Exiting.")
         return
@@ -113,36 +118,43 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
     if not es_client.ping():
         raise ConnectionError(f"Could not connect to Elasticsearch at {es_url}")
 
-    # Recreate Qdrant Collection
-    print(f"Recreating Qdrant collection: {COLLECTION_NAME}...")
-    qdrant_client.recreate_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
-    )
+    if not append:
+        # Recreate Qdrant Collection
+        print(f"Recreating Qdrant collection: {COLLECTION_NAME}...")
+        try:
+            qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
+        except Exception:
+            pass
+        qdrant_client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+        )
 
-    # Recreate Elasticsearch Index
-    if es_client.indices.exists(index=INDEX_NAME):
-        print(f"Deleting existing Elasticsearch index: {INDEX_NAME}...")
-        es_client.indices.delete(index=INDEX_NAME)
+        # Recreate Elasticsearch Index
+        if es_client.indices.exists(index=INDEX_NAME):
+            print(f"Deleting existing Elasticsearch index: {INDEX_NAME}...")
+            es_client.indices.delete(index=INDEX_NAME)
 
-    print(f"Creating Elasticsearch index: {INDEX_NAME}...")
-    mapping = {
-        "mappings": {
-            "properties": {
-                "chunk_id": {"type": "integer"},
-                "question_id": {"type": "keyword"},
-                "score": {"type": "integer"},
-                "is_accepted": {"type": "boolean"},
-                "domain": {"type": "keyword"},
-                "reasoning_category": {"type": "keyword"},
-                "chunk_text": {
-                    "type": "text",
-                    "similarity": "BM25"
+        print(f"Creating Elasticsearch index: {INDEX_NAME}...")
+        mapping = {
+            "mappings": {
+                "properties": {
+                    "chunk_id": {"type": "integer"},
+                    "question_id": {"type": "keyword"},
+                    "score": {"type": "integer"},
+                    "is_accepted": {"type": "boolean"},
+                    "domain": {"type": "keyword"},
+                    "reasoning_category": {"type": "keyword"},
+                    "chunk_text": {
+                        "type": "text",
+                        "similarity": "BM25"
+                    }
                 }
             }
         }
-    }
-    es_client.indices.create(index=INDEX_NAME, body=mapping)
+        es_client.indices.create(index=INDEX_NAME, body=mapping)
+    else:
+        print("Append mode active: skipping index recreation.")
 
     # Batch Indexing
     print(f"Embedding and uploading {total} chunks in batches of {batch_size}...")
@@ -189,6 +201,8 @@ async def run_ingestion_async(data_path, qdrant_url, es_url, ml_url, limit, batc
 def main():
     parser = argparse.ArgumentParser(description="Ingest StackExchange data to Qdrant & Elasticsearch")
     parser.add_argument("--limit", type=int, default=1000, help="Limit number of chunks to ingest (0 or None for all)")
+    parser.add_argument("--offset", type=int, default=0, help="Number of chunks to skip before ingesting")
+    parser.add_argument("--append", action="store_true", help="Do not recreate collections, append to existing")
     parser.add_argument("--data", default="data/processed_dataset.jsonl", help="Dataset path")
     parser.add_argument("--qdrant-url", default=os.getenv("QDRANT_URL", "http://localhost:6333"), help="Qdrant url")
     parser.add_argument("--es-url", default=os.getenv("ELASTICSEARCH_URL", "http://localhost:9200"), help="Elasticsearch url")
@@ -205,7 +219,9 @@ def main():
             es_url=args.es_url,
             ml_url=args.ml_url,
             limit=limit,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            offset=args.offset,
+            append=args.append
         )
     )
 

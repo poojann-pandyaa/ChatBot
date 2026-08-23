@@ -11,8 +11,7 @@ public class FollowupDetector {
 
     private static final List<String> PRONOUN_PATTERNS = List.of(
             "it", "this", "that", "them", "these", "those",
-            "its", "the same", "above", "previous", "earlier",
-            "in java", "in python", "in c++", "in javascript", "in go", "in rust"
+            "its", "the same", "above", "previous", "earlier"
     );
 
     public boolean isFollowup(String query, List<ChatMessage> history) {
@@ -21,12 +20,7 @@ public class FollowupDetector {
         }
 
         String q = query.toLowerCase().trim();
-
-        // Short queries with history are likely follow-ups
         String[] words = q.split("\\s+");
-        if (words.length <= 5) {
-            return true;
-        }
 
         // Contains pronouns referencing previous context
         for (String pronoun : PRONOUN_PATTERNS) {

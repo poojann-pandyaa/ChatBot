@@ -75,7 +75,19 @@ public class RouterService {
         return obj.toString();
     }
 
+    private boolean isZeroOrEmptyVector(List<Double> vector) {
+        if (vector == null || vector.isEmpty()) return true;
+        for (Double val : vector) {
+            if (val != null && val != 0.0) return false;
+        }
+        return true;
+    }
+
     public Mono<Map<String, Object>> checkCache(List<Double> qVector, String reasoningType) {
+        if (isZeroOrEmptyVector(qVector)) {
+            log.warn("Skipping semantic cache check for zero/empty vector.");
+            return Mono.empty();
+        }
         byte[] vectorBytes = toByteArray(qVector);
         return RedisCommandExecutor.execute(redisTemplate, "FT.SEARCH",
                 "idx:semantic_cache".getBytes(StandardCharsets.UTF_8),
@@ -139,6 +151,10 @@ public class RouterService {
     }
 
     private Mono<Void> saveToCache(String rewrittenPrompt, List<Double> qVector, String answer, String reasoningType, List<SourceMetadata> sources) {
+        if (isZeroOrEmptyVector(qVector)) {
+            log.warn("Skipping semantic cache save for zero/empty vector.");
+            return Mono.empty();
+        }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(rewrittenPrompt.getBytes(StandardCharsets.UTF_8));
@@ -260,7 +276,7 @@ public class RouterService {
                             return reasoningEngine.execute(trace)
                                 .flatMap(engineTrace -> {
                                     QualityGateService.QualityGateResult qgResult = qualityGateService.evaluate(engineTrace.getRerankedFinal(), reasoningType);
-                                    trace.getRouterDecisions().put("quality_score", qgResult.averageScore());
+                                    trace.getRouterDecisions().put("quality_score", qgResult.score());
 
                                     Mono<ReasoningTrace> pipelineMono;
                                     if (!qgResult.passed()) {
@@ -411,7 +427,7 @@ public class RouterService {
                             return reasoningEngine.execute(trace)
                                 .flatMapMany(engineTrace -> {
                                     QualityGateService.QualityGateResult qgResult = qualityGateService.evaluate(engineTrace.getRerankedFinal(), reasoningType);
-                                    trace.getRouterDecisions().put("quality_score", qgResult.averageScore());
+                                    trace.getRouterDecisions().put("quality_score", qgResult.score());
 
                                     Mono<ReasoningTrace> pipelineMono;
                                     if (!qgResult.passed()) {

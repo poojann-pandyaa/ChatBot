@@ -285,7 +285,12 @@ def _estimate_ambiguity(query: str) -> str:
     vague_markers = ["it", "this", "that", "thing", "stuff", "somehow"]
     word_count = len(query.split())
     has_vague = any(re.search(rf"\b{m}\b", query.lower()) for m in vague_markers)
-    if word_count < 5 or has_vague:
+    # Only flag as high ambiguity if the query is very short AND contains vague
+    # pronouns/markers. Short-but-specific queries like "Explain socket programming"
+    # should proceed to retrieval, not be blocked for clarification.
+    if has_vague and word_count < 5:
+        return "high"
+    if word_count < 3:
         return "high"
     if word_count < 10:
         return "medium"

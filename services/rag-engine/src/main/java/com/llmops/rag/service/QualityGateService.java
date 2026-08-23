@@ -19,7 +19,7 @@ public class QualityGateService {
         this.thresholds = thresholds;
     }
 
-    public record QualityGateResult(boolean passed, double averageScore, double threshold) {}
+    public record QualityGateResult(boolean passed, double score, double threshold) {}
 
     public QualityGateResult evaluate(List<Map<String, Object>> rerankedResults, String reasoningType) {
         double threshold = thresholds.getOrDefault(reasoningType, 0.1);
@@ -27,18 +27,23 @@ public class QualityGateService {
             return new QualityGateResult(false, 0.0, threshold);
         }
 
+        // Use the highest base_ce_score (raw CrossEncoder relevance).
+        // Since rerankedResults are sorted by final_score, the first element's 
+        // base_ce_score might not strictly be the absolute max if metadata bonuses 
+        // shifted the order, so we find the max base_ce_score among the top 3.
         int limit = Math.min(3, rerankedResults.size());
-        double sum = 0.0;
+        double maxScore = -999.0;
         for (int i = 0; i < limit; i++) {
             Map<String, Object> r = rerankedResults.get(i);
-            Number finalScoreNum = (Number) r.get("final_score");
-            double score = finalScoreNum != null ? finalScoreNum.doubleValue() : 0.0;
-            sum += score;
+            Number ceScoreNum = (Number) r.get("base_ce_score");
+            double score = ceScoreNum != null ? ceScoreNum.doubleValue() : 0.0;
+            if (score > maxScore) {
+                maxScore = score;
+            }
         }
 
-        double averageScore = sum / limit;
-        boolean passed = averageScore >= threshold;
-        return new QualityGateResult(passed, averageScore, threshold);
+        boolean passed = maxScore >= threshold;
+        return new QualityGateResult(passed, maxScore, threshold);
     }
 
     public String refineQuery(String originalQuery, Map<String, Object> classification) {
