@@ -510,12 +510,15 @@ public class RouterService {
         });
     }
 
-    private List<SourceMetadata> formatSources(List<Map<String, Object>> rerankedFinal) {
+    List<SourceMetadata> formatSources(List<Map<String, Object>> rerankedFinal) {
         List<SourceMetadata> list = new ArrayList<>();
         if (rerankedFinal != null) {
             for (Map<String, Object> c : rerankedFinal) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> meta = (Map<String, Object>) c.get("metadata");
+                if (meta == null) {
+                    meta = java.util.Map.of();
+                }
                 
                 Number scoreNum = (Number) c.getOrDefault("final_score", c.getOrDefault("score", 0.0));
                 double score = scoreNum != null ? scoreNum.doubleValue() : 0.0;
@@ -523,8 +526,8 @@ public class RouterService {
                 Number chunkIdNum = (Number) c.get("chunk_id");
                 int chunkId = chunkIdNum != null ? chunkIdNum.intValue() : 0;
                 
-                Number qIdNum = (Number) meta.getOrDefault("question_id", "");
-                String questionId = qIdNum != null ? qIdNum.toString() : "";
+                Object qIdObj = meta.get("question_id");
+                String questionId = qIdObj != null ? qIdObj.toString() : "";
                 
                 Boolean isAcc = (Boolean) meta.getOrDefault("is_accepted", false);
                 boolean isAccepted = isAcc != null && isAcc;

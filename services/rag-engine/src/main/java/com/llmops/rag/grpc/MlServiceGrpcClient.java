@@ -236,6 +236,6 @@ public class MlServiceGrpcClient {
         }
         boolean hasExplain = adaptiveExplain.stream().anyMatch(q::contains);
         boolean hasUsage = adaptiveUsage.stream().anyMatch(q::contains);
-        return (hasExplain || hasUsage) ? "adaptive" : "commonsense";
+        return (hasExplain && hasUsage) ? "adaptive" : "commonsense";
     }
 }

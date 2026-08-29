@@ -90,4 +90,49 @@ public class RouterServiceTest {
         // Verify that ReasoningEngine was NEVER called
         verify(reasoningEngine, never()).execute(any(ReasoningTrace.class));
     }
+    @Test
+    public void testFormatSourcesWithStringQuestionId() {
+        Map<String, Object> candidate = Map.of(
+            "score", 0.9,
+            "chunk_id", 123,
+            "metadata", Map.of(
+                "question_id", "Q-12345",
+                "is_accepted", true,
+                "domain", "test-domain",
+                "chunk_text", "Some text"
+            )
+        );
+        
+        List<com.llmops.rag.model.SourceMetadata> result = routerService.formatSources(List.of(candidate));
+        assertEquals(1, result.size());
+        assertEquals("Q-12345", result.get(0).questionId());
+    }
+
+    @Test
+    public void testFormatSourcesWithMissingQuestionId() {
+        Map<String, Object> candidate = Map.of(
+            "score", 0.9,
+            "chunk_id", 123,
+            "metadata", Map.of(
+                "is_accepted", true,
+                "domain", "test-domain",
+                "chunk_text", "Some text"
+            )
+        );
+        
+        List<com.llmops.rag.model.SourceMetadata> result = routerService.formatSources(List.of(candidate));
+        assertEquals(1, result.size());
+        assertEquals("", result.get(0).questionId());
+    }
+
+    @Test
+    public void testFormatSourcesWithNullMetadata() {
+        java.util.Map<String, Object> cand = new java.util.HashMap<>();
+        cand.put("chunk_id", 123);
+        cand.put("metadata", null);
+
+        List<com.llmops.rag.model.SourceMetadata> result = routerService.formatSources(List.of(cand));
+        assertEquals(1, result.size());
+        assertEquals("", result.get(0).questionId());
+    }
 }

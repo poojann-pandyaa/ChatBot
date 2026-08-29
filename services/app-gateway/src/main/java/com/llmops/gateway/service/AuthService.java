@@ -44,7 +44,7 @@ public class AuthService {
         this.accessTtlMinutes = accessTtlMinutes;
     }
 
-    public record AuthResult(String accessToken, String refreshToken, String userId, long expiresInSeconds) {}
+    public record AuthResult(String accessToken, String refreshToken, String userId, String username, long expiresInSeconds) {}
 
     /**
      * Registers a new user, hashes password, initializes budget, issues tokens.
@@ -60,14 +60,14 @@ public class AuthService {
                 String hash = passwordEncoder.encode(password);
                 User user = new User(userId, username, hash, LocalDateTime.now());
                 userRepository.save(user);
-                return userId;
+                return user;
             } finally {
                 DataSourceContextHolder.clear();
             }
         })
         .subscribeOn(Schedulers.boundedElastic())
-        .flatMap(userId -> tokenBudgetService.initializeBudget(userId).thenReturn(userId))
-        .flatMap(this::issueTokens);
+        .flatMap(user -> tokenBudgetService.initializeBudget(user.getId()).thenReturn(user))
+        .flatMap(user -> issueTokens(user.getId(), user.getUsername()));
     }
 
     /**
@@ -87,7 +87,7 @@ public class AuthService {
                     if (optUser.isEmpty() || !passwordEncoder.matches(password, optUser.get().getPasswordHash())) {
                         return Mono.error(new IllegalArgumentException("Invalid credentials"));
                     }
-                    return issueTokens(optUser.get().getId());
+                    return issueTokens(optUser.get().getId(), optUser.get().getUsername());
                 });
     }
 
@@ -98,10 +98,12 @@ public class AuthService {
         String key = REFRESH_PREFIX + oldRefreshToken;
         return redisTemplate.opsForValue().get(key)
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("Invalid or expired refresh token")))
-                .flatMap(userId -> 
-                    // Delete the old token (rotation)
-                    redisTemplate.delete(key).then(issueTokens(userId))
-                );
+                .flatMap(redisValue -> {
+                    String[] parts = redisValue.split(":", 2);
+                    String userId = parts[0];
+                    String username = parts.length > 1 ? parts[1] : userId;
+                    return redisTemplate.delete(key).then(issueTokens(userId, username));
+                });
     }
 
     /**
@@ -114,14 +116,14 @@ public class AuthService {
         return redisTemplate.delete(REFRESH_PREFIX + refreshToken).then();
     }
 
-    private Mono<AuthResult> issueTokens(String userId) {
+    private Mono<AuthResult> issueTokens(String userId, String username) {
         String accessToken = jwtService.generateToken(userId);
         String refreshToken = UUID.randomUUID().toString();
         
         return redisTemplate.opsForValue().set(
                 REFRESH_PREFIX + refreshToken,
-                userId,
+                userId + ":" + username,
                 Duration.ofDays(refreshTtlDays)
-        ).thenReturn(new AuthResult(accessToken, refreshToken, userId, accessTtlMinutes * 60));
+        ).thenReturn(new AuthResult(accessToken, refreshToken, userId, username, accessTtlMinutes * 60));
     }
 }

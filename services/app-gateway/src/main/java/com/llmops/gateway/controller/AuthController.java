@@ -52,6 +52,7 @@ public class AuthController {
                     Map<String, Object> responseBody = new HashMap<>();
                     responseBody.put("token", result.accessToken());
                     responseBody.put("user_id", result.userId());
+                    responseBody.put("username", result.username());
                     responseBody.put("expires_in", result.expiresInSeconds());
                     return ResponseEntity.status(HttpStatus.CREATED)
                             .header(HttpHeaders.SET_COOKIE, cookie.toString())
@@ -81,6 +82,7 @@ public class AuthController {
                     Map<String, Object> responseBody = new HashMap<>();
                     responseBody.put("token", result.accessToken());
                     responseBody.put("user_id", result.userId());
+                    responseBody.put("username", result.username());
                     responseBody.put("expires_in", result.expiresInSeconds());
                     return ResponseEntity.ok()
                             .header(HttpHeaders.SET_COOKIE, cookie.toString())
@@ -107,6 +109,7 @@ public class AuthController {
                     Map<String, Object> responseBody = new HashMap<>();
                     responseBody.put("token", result.accessToken());
                     responseBody.put("user_id", result.userId());
+                    responseBody.put("username", result.username());
                     responseBody.put("expires_in", result.expiresInSeconds());
                     return ResponseEntity.ok()
                             .header(HttpHeaders.SET_COOKIE, cookie.toString())

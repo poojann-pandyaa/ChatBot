@@ -43,4 +43,22 @@ public class MlServiceGrpcClientTest {
             assertEquals(expected, result, "Failed for query: " + query);
         }
     }
+
+    @Test
+    public void testExplicitAdaptiveCombinations() {
+        // a) ONLY explain signal -> "commonsense"
+        // "what is" is an explain signal. No usage signal present.
+        String explainOnly = ReflectionTestUtils.invokeMethod(client, "keywordFallback", "what is docker?");
+        assertEquals("commonsense", explainOnly, "ONLY explain signal should be commonsense");
+
+        // b) ONLY usage signal -> "commonsense"
+        // "how to implement" is a usage signal. No explain signal present.
+        String usageOnly = ReflectionTestUtils.invokeMethod(client, "keywordFallback", "how to implement rest in java");
+        assertEquals("commonsense", usageOnly, "ONLY usage signal should be commonsense");
+
+        // c) BOTH signals -> "adaptive"
+        // "what is" (explain) + "when should I use it" (usage)
+        String bothSignals = ReflectionTestUtils.invokeMethod(client, "keywordFallback", "what is docker and when should I use it");
+        assertEquals("adaptive", bothSignals, "BOTH signals should be adaptive");
+    }
 }

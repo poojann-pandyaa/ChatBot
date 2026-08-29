@@ -56,6 +56,7 @@ export default function Home({
   };
 
   const [authUserId, setAuthUserId] = useState<string>('');
+  const [authUsername, setAuthUsername] = useState<string>('');
   const [loginUserId, setLoginUserId] = useState<string>('');
   const [loginPassword, setLoginPassword] = useState<string>('');
   const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
@@ -81,6 +82,7 @@ export default function Home({
           const data = await refreshRes.json();
           setAuthToken(data.token);
           setAuthUserId(data.user_id);
+          if (data.username) setAuthUsername(data.username);
           currentToken = data.token;
           const retryHeaders = { ...options.headers, 'Authorization': `Bearer ${currentToken}` };
           res = await fetch(url, { ...options, headers: retryHeaders });
@@ -121,6 +123,9 @@ export default function Home({
       if (res.ok && data.token) {
         setAuthToken(data.token);
         setAuthUserId(data.user_id);
+        if (data.username) setAuthUsername(data.username);
+        localStorage.removeItem('selectedConversation');
+        localStorage.removeItem('conversationHistory');
       } else {
         setLoginError(data.error || 'Authentication failed.');
       }
@@ -137,8 +142,11 @@ export default function Home({
     } catch (e) {}
     setAuthToken(null);
     setAuthUserId('');
+    setAuthUsername('');
     setConversations([]);
     setSelectedConversation(undefined);
+    localStorage.removeItem('selectedConversation');
+    localStorage.removeItem('conversationHistory');
     setTokenBudgetLimit(null);
     setTokenBudgetRemaining(null);
     setTokenBudgetReset(null);
@@ -702,6 +710,7 @@ export default function Home({
         if (data && data.token) {
           setAuthToken(data.token);
           setAuthUserId(data.user_id);
+          if (data.username) setAuthUsername(data.username);
         }
       })
       .catch(() => {})
@@ -933,7 +942,7 @@ export default function Home({
               color: 'rgba(255,255,255,0.6)', fontSize: '12px',
               background: 'rgba(255,255,255,0.08)', padding: '4px 10px', borderRadius: '20px',
             }}>
-              👤 {authUserId}
+              👤 {authUsername || authUserId}
             </span>
             <button
               id="logout-btn"

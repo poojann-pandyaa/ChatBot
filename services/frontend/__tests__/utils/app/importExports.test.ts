@@ -1,7 +1,7 @@
 import { ExportFormatV1, ExportFormatV2, ExportFormatV4 } from '@/types/export';
 import { OpenAIModels, OpenAIModelID } from '@/types/openai';
 import { DEFAULT_SYSTEM_PROMPT } from '@/utils/app/const';
-import { it, describe, expect } from 'vitest';
+import { it, describe, expect, vi } from 'vitest';
 
 import {
   cleanData,
@@ -10,6 +10,7 @@ import {
   isExportFormatV3,
   isExportFormatV4,
   isLatestExportFormat,
+  importData,
 } from '@/utils/app/importExport';
 
 describe('Export Format Functions', () => {
@@ -99,7 +100,7 @@ describe('cleanData Functions', () => {
                 content: 'Hi',
               },
             ],
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             prompt: DEFAULT_SYSTEM_PROMPT,
             folderId: null,
           },
@@ -154,7 +155,7 @@ describe('cleanData Functions', () => {
                 content: 'Hi',
               },
             ],
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             prompt: DEFAULT_SYSTEM_PROMPT,
             folderId: null,
           },
@@ -189,7 +190,7 @@ describe('cleanData Functions', () => {
                 content: 'Hi',
               },
             ],
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             prompt: DEFAULT_SYSTEM_PROMPT,
             folderId: null,
           },
@@ -207,7 +208,7 @@ describe('cleanData Functions', () => {
             name: 'prompt 1',
             description: '',
             content: '',
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             folderId: null,
           },
         ],
@@ -231,7 +232,7 @@ describe('cleanData Functions', () => {
                 content: 'Hi',
               },
             ],
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             prompt: DEFAULT_SYSTEM_PROMPT,
             folderId: null,
           },
@@ -249,7 +250,7 @@ describe('cleanData Functions', () => {
             name: 'prompt 1',
             description: '',
             content: '',
-            model: OpenAIModels[OpenAIModelID.GPT_3_5],
+            model: OpenAIModels[OpenAIModelID.GEMMA_2B],
             folderId: null,
           },
         ],
@@ -258,4 +259,32 @@ describe('cleanData Functions', () => {
     });
   });
   
+});
+
+describe('importData Functions', () => {
+  it('should not crash when importing an empty history', () => {
+    // Mock localStorage
+    const setItemSpy = vi.fn();
+    const removeItemSpy = vi.fn();
+    global.localStorage = {
+      setItem: setItemSpy,
+      removeItem: removeItemSpy,
+      getItem: vi.fn(),
+      length: 0,
+      clear: vi.fn(),
+      key: vi.fn()
+    } as any;
+
+    const emptyData: ExportFormatV4 = {
+      version: 4,
+      history: [],
+      folders: [],
+      prompts: [],
+    };
+
+    importData(emptyData);
+
+    expect(setItemSpy).toHaveBeenCalledWith('conversationHistory', '[]');
+    expect(removeItemSpy).toHaveBeenCalledWith('selectedConversation');
+  });
 });

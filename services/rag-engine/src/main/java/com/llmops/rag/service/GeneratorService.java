@@ -50,6 +50,9 @@ public class GeneratorService {
             Map<String, Object> cand = retrievedChunks.get(i);
             @SuppressWarnings("unchecked")
             Map<String, Object> meta = (Map<String, Object>) cand.get("metadata");
+            if (meta == null) {
+                meta = java.util.Map.of();
+            }
             
             Number scoreNum = (Number) meta.getOrDefault("score", 0.0);
             double score = scoreNum != null ? scoreNum.doubleValue() : 0.0;
@@ -149,20 +152,15 @@ public class GeneratorService {
                 "<end_of_turn>\n" +
                 "<start_of_turn>model\n";
 
-        Map<String, Object> body = Map.of(
-                "model", modelName,
-                "prompt", prompt,
-                "options", Map.of(
-                        "temperature", 0.0,
-                        "num_ctx", 2048,
-                        "num_predict", 32,
-                        "stop", List.of("\n", "<end_of_turn>")
-                ),
-                "stream", false
+        Map<String, Object> options = Map.of(
+                "temperature", 0.0,
+                "num_ctx", 2048,
+                "num_predict", 32,
+                "stop", List.of("\n", "<end_of_turn>")
         );
 
         // Directly call the underlying Ollama generate method bypass circuit breaker for raw rewrite
-        return ollamaClient.generate(prompt)
+        return ollamaClient.generate(prompt, options)
                 .map(res -> {
                     String rewritten = res.replace("\"", "").replace("'", "").trim();
                     if (!rewritten.isEmpty()) {

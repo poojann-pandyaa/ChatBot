@@ -28,6 +28,9 @@ public class RerankerService {
         List<String> documents = candidates.stream().map(cand -> {
             @SuppressWarnings("unchecked")
             Map<String, Object> meta = (Map<String, Object>) cand.get("metadata");
+            if (meta == null) {
+                meta = java.util.Map.of();
+            }
             return (String) meta.getOrDefault("chunk_text", "");
         }).toList();
 
@@ -38,6 +41,9 @@ public class RerankerService {
                         Map<String, Object> cand = candidates.get(i);
                         @SuppressWarnings("unchecked")
                         Map<String, Object> meta = (Map<String, Object>) cand.get("metadata");
+                        if (meta == null) {
+                            meta = java.util.Map.of();
+                        }
                         
                         double baseScore = i < scores.size() ? scores.get(i) : 0.0;
                         

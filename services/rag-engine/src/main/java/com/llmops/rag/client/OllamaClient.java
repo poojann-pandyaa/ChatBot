@@ -31,16 +31,22 @@ public class OllamaClient {
     @CircuitBreaker(name = "ollamaClient", fallbackMethod = "fallbackGenerate")
     @Retry(name = "ollamaClient")
     public Mono<String> generate(String prompt) {
+        return generate(prompt, Map.of(
+                "temperature", 0.2,
+                "top_p", 0.9,
+                "repeat_penalty", 1.0,
+                "num_ctx", 4096,
+                "num_predict", 2048
+        ));
+    }
+
+    @CircuitBreaker(name = "ollamaClient", fallbackMethod = "fallbackGenerateWithOptions")
+    @Retry(name = "ollamaClient")
+    public Mono<String> generate(String prompt, Map<String, Object> options) {
         Map<String, Object> body = Map.of(
                 "model", modelName,
                 "prompt", prompt,
-                "options", Map.of(
-                        "temperature", 0.2,
-                        "top_p", 0.9,
-                        "repeat_penalty", 1.0,
-                        "num_ctx", 4096,
-                        "num_predict", 2048
-                ),
+                "options", options,
                 "stream", false
         );
 
@@ -76,6 +82,11 @@ public class OllamaClient {
 
     public Mono<String> fallbackGenerate(String prompt, Throwable t) {
         log.warn("Ollama generate fallback triggered: {}", t.getMessage());
+        return Mono.just("[MOCK GENERATION] Response to prompt: " + prompt.substring(0, Math.min(prompt.length(), 100)) + "...");
+    }
+
+    public Mono<String> fallbackGenerateWithOptions(String prompt, Map<String, Object> options, Throwable t) {
+        log.warn("Ollama generate options fallback triggered: {}", t.getMessage());
         return Mono.just("[MOCK GENERATION] Response to prompt: " + prompt.substring(0, Math.min(prompt.length(), 100)) + "...");
     }
 

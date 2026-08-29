@@ -77,7 +77,7 @@ management:
 # ── gRPC client config ────────────────────────────────────────────────────────
 rag-engine:
   grpc:
-    host: ${RAG_ENGINE_GRPC_HOST:rag-engine}
+    host: ${RAG_ENGINE_GRPC_HOST:localhost}
     port: ${RAG_ENGINE_GRPC_PORT:9091}
 
 # Legacy REST url kept for health checks only (not used for chat after Phase 3)

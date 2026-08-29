@@ -178,9 +178,9 @@ services:
       - OLLAMA_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=gemma2:2b
       - OLLAMA_NUM_PARALLEL=4
-      - ML_SERVICE_URL=http://host.docker.internal:8005
-      - ML_SERVICE_GRPC_HOST=host.docker.internal
-      - ML_SERVICE_GRPC_PORT=50055
+      - ML_SERVICE_URL=http://ml-service:8000
+      - ML_SERVICE_GRPC_HOST=ml-service
+      - ML_SERVICE_GRPC_PORT=50051
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-SuperSecureRedisPassword123}

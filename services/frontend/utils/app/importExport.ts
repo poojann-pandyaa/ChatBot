@@ -114,10 +114,14 @@ export const importData = (
 
   const conversations = history;
   localStorage.setItem('conversationHistory', JSON.stringify(conversations));
-  localStorage.setItem(
-    'selectedConversation',
-    JSON.stringify(conversations[conversations.length - 1]),
-  );
+  if (conversations && conversations.length > 0) {
+    localStorage.setItem(
+      'selectedConversation',
+      JSON.stringify(conversations[conversations.length - 1]),
+    );
+  } else {
+    localStorage.removeItem('selectedConversation');
+  }
 
   localStorage.setItem('folders', JSON.stringify(folders));
   localStorage.setItem('prompts', JSON.stringify(prompts));
