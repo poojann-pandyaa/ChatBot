@@ -20,8 +20,6 @@ const handler = async (req: NextRequest): Promise<Response> => {
     // Forward the JWT Authorization header from the browser request to the gateway
     const authHeader = req.headers.get('authorization') || '';
 
-    console.log(`Forwarding chat request to gateway: ${gatewayUrl}/api/chat for session: ${activeSessionId}`);
-
     const gatewayRes = await fetch(`${gatewayUrl}/api/chat`, {
       method: 'POST',
       headers: {

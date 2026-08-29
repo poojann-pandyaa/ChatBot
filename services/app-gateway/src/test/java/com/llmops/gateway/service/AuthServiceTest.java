@@ -45,12 +45,8 @@ public class AuthServiceTest {
     void setUp() {
         authService = new AuthService(userRepository, jwtService, tokenBudgetService, redisTemplate, 7, 15);
         ReflectionTestUtils.setField(authService, "passwordEncoder", passwordEncoder);
-        
-        // Mock redis ops for issueTokens
-        // Note: issueTokens is called in login, which uses redisTemplate.opsForValue()
-        // Wait, issueTokens is a private method called by login. 
-        // Let's set it up only if needed, but it is needed.
     }
+
 
     @Test
     void testLoginReturnsUsernameInAuthResult() {
