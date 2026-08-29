@@ -1,76 +1,136 @@
 package com.llmops.gateway.controller;
 
-import com.llmops.gateway.security.JwtService;
+import com.llmops.gateway.service.AuthService;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Map;
 import java.util.HashMap;
+import java.util.Map;
 
-/**
- * Handles user authentication. Issues signed JWT tokens.
- *
- * Hardcoded demo users (extend to a DB-backed user store in production):
- *   alice / alice123
- *   bob   / bob123
- *   admin / admin123
- */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
-    private final JwtService jwtService;
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-    private final Map<String, String> users = new HashMap<>();
+    private final AuthService authService;
 
-    public AuthController(JwtService jwtService) {
-        this.jwtService = jwtService;
-        // Dynamically encode for demo purposes since we don't have a DB
-        this.users.put("alice", passwordEncoder.encode("alice123"));
-        this.users.put("bob", passwordEncoder.encode("bob123"));
-        this.users.put("admin", passwordEncoder.encode("admin123"));
+    public AuthController(AuthService authService) {
+        this.authService = authService;
     }
 
-    /**
-     * POST /api/auth/login
-     * Body: { "user_id": "alice", "password": "alice123" }
-     * Returns: { "token": "...", "user_id": "alice", "expires_at": "..." }
-     */
-    @PostMapping("/login")
-    public Mono<ResponseEntity<Map<String, Object>>> login(
-            @RequestBody Map<String, String> body) {
+    private ResponseCookie createRefreshCookie(String refreshToken, long maxAgeSeconds, ServerWebExchange exchange) {
+        boolean isSecure = "https".equalsIgnoreCase(exchange.getRequest().getURI().getScheme()) ||
+                           "https".equalsIgnoreCase(exchange.getRequest().getHeaders().getFirst("X-Forwarded-Proto"));
+                           
+        return ResponseCookie.from("refresh_token", refreshToken != null ? refreshToken : "")
+                .httpOnly(true)
+                .secure(isSecure)
+                .path("/api/auth")
+                .maxAge(maxAgeSeconds)
+                .sameSite("Lax")
+                .build();
+    }
 
-        String userId   = body.getOrDefault("user_id", "").trim();
+    @PostMapping("/register")
+    public Mono<ResponseEntity<Map<String, Object>>> register(@RequestBody Map<String, String> body, ServerWebExchange exchange) {
+        String username = body.getOrDefault("username", "").trim();
         String password = body.getOrDefault("password", "").trim();
 
-        if (userId.isBlank() || password.isBlank()) {
-            return Mono.just(ResponseEntity.badRequest()
-                    .<Map<String, Object>>body(Map.of("error", "user_id and password are required")));
+        if (username.isBlank() || password.isBlank()) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", "username and password are required");
+            return Mono.just(ResponseEntity.badRequest().body(err));
         }
 
-        String expectedPasswordHash = users.get(userId);
-        
-        if (expectedPasswordHash == null || !passwordEncoder.matches(password, expectedPasswordHash)) {
-            return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .<Map<String, Object>>body(Map.of("error", "Invalid credentials")));
+        return authService.register(username, password)
+                .map(result -> {
+                    ResponseCookie cookie = createRefreshCookie(result.refreshToken(), 7 * 24 * 3600L, exchange);
+                    Map<String, Object> responseBody = new HashMap<>();
+                    responseBody.put("token", result.accessToken());
+                    responseBody.put("user_id", result.userId());
+                    responseBody.put("expires_in", result.expiresInSeconds());
+                    return ResponseEntity.status(HttpStatus.CREATED)
+                            .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                            .<Map<String, Object>>body(responseBody);
+                })
+                .onErrorResume(IllegalArgumentException.class, e -> {
+                    Map<String, Object> err = new HashMap<>();
+                    err.put("error", e.getMessage());
+                    return Mono.just(ResponseEntity.badRequest().body(err));
+                });
+    }
+
+    @PostMapping("/login")
+    public Mono<ResponseEntity<Map<String, Object>>> login(@RequestBody Map<String, String> body, ServerWebExchange exchange) {
+        String username = body.getOrDefault("username", "").trim();
+        String password = body.getOrDefault("password", "").trim();
+
+        if (username.isBlank() || password.isBlank()) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", "username and password are required");
+            return Mono.just(ResponseEntity.badRequest().body(err));
         }
 
-        String token = jwtService.generateToken(userId);
-        String expiresAt = Instant.now().plus(24, ChronoUnit.HOURS).toString();
+        return authService.login(username, password)
+                .map(result -> {
+                    ResponseCookie cookie = createRefreshCookie(result.refreshToken(), 7 * 24 * 3600L, exchange);
+                    Map<String, Object> responseBody = new HashMap<>();
+                    responseBody.put("token", result.accessToken());
+                    responseBody.put("user_id", result.userId());
+                    responseBody.put("expires_in", result.expiresInSeconds());
+                    return ResponseEntity.ok()
+                            .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                            .<Map<String, Object>>body(responseBody);
+                })
+                .onErrorResume(IllegalArgumentException.class, e -> {
+                    Map<String, Object> err = new HashMap<>();
+                    err.put("error", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(err));
+                });
+    }
 
-        Map<String, Object> response = Map.of(
-                "token", token,
-                "user_id", userId,
-                "expires_at", expiresAt
-        );
-        return Mono.just(ResponseEntity.ok(response));
+    @PostMapping("/refresh")
+    public Mono<ResponseEntity<Map<String, Object>>> refresh(@CookieValue(value = "refresh_token", required = false) String refreshToken, ServerWebExchange exchange) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", "Missing refresh token");
+            return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(err));
+        }
+
+        return authService.refresh(refreshToken)
+                .map(result -> {
+                    ResponseCookie cookie = createRefreshCookie(result.refreshToken(), 7 * 24 * 3600L, exchange);
+                    Map<String, Object> responseBody = new HashMap<>();
+                    responseBody.put("token", result.accessToken());
+                    responseBody.put("user_id", result.userId());
+                    responseBody.put("expires_in", result.expiresInSeconds());
+                    return ResponseEntity.ok()
+                            .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                            .<Map<String, Object>>body(responseBody);
+                })
+                .onErrorResume(IllegalArgumentException.class, e -> {
+                    // Invalid/expired refresh token — clear the cookie
+                    ResponseCookie clearCookie = createRefreshCookie("", 0, exchange);
+                    Map<String, Object> err = new HashMap<>();
+                    err.put("error", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                            .header(HttpHeaders.SET_COOKIE, clearCookie.toString())
+                            .body(err));
+                });
+    }
+
+    @PostMapping("/logout")
+    public Mono<ResponseEntity<Void>> logout(@CookieValue(value = "refresh_token", required = false) String refreshToken, ServerWebExchange exchange) {
+        return authService.logout(refreshToken)
+                .then(Mono.fromSupplier(() -> {
+                    ResponseCookie clearCookie = createRefreshCookie("", 0, exchange);
+                    return ResponseEntity.noContent()
+                            .<Void>header(HttpHeaders.SET_COOKIE, clearCookie.toString())
+                            .build();
+                }));
     }
 }

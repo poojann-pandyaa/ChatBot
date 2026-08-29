@@ -6,6 +6,7 @@ import com.llmops.gateway.repository.ConversationRepository;
 import com.llmops.gateway.service.ConversationCommandService;
 import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
+import com.llmops.gateway.service.TokenBudgetService;
 import com.llmops.gateway.sharding.ShardRouter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -38,6 +39,7 @@ public class ChatControllerTest {
     private ConversationListService conversationListService;
     private ShardRouter shardRouter;
     private KafkaAdmin kafkaAdmin;
+    private TokenBudgetService tokenBudgetService;
 
     @BeforeEach
     public void setup() {
@@ -49,6 +51,13 @@ public class ChatControllerTest {
         conversationListService = Mockito.mock(ConversationListService.class);
         shardRouter = Mockito.mock(ShardRouter.class);
         kafkaAdmin = Mockito.mock(KafkaAdmin.class);
+        tokenBudgetService = Mockito.mock(TokenBudgetService.class);
+
+        // Default stub: full budget, no reset needed
+        when(tokenBudgetService.getRemainingBudget(anyString())).thenReturn(Mono.just(50000));
+        when(tokenBudgetService.deductTokens(anyString(), anyString(), anyString())).thenReturn(Mono.just(49000));
+        when(tokenBudgetService.getMaxTokens()).thenReturn(50000);
+        when(tokenBudgetService.estimateSecondsToReset(anyInt())).thenReturn(0);
         
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         PrometheusMeterRegistry prometheusRegistry = Mockito.mock(PrometheusMeterRegistry.class);
@@ -67,12 +76,14 @@ public class ChatControllerTest {
                 conversationQueryService,
                 conversationListService,
                 shardRouter,
+                tokenBudgetService,
                 meterRegistry,
                 prometheusRegistry,
                 kafkaAdmin
         );
         webTestClient = WebTestClient.bindToController(controller).build();
     }
+
 
     @Test
     public void testHealthEndpoint() {

@@ -6,16 +6,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.FixedBackOff;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 
 import java.util.Map;
 
@@ -23,14 +16,13 @@ import java.util.Map;
  * Spring Kafka configuration class.
  *
  * <p>Configures a DefaultErrorHandler to retry failed message deliveries 3 times
- * with a 2-second delay, and then route them to the Dead Letter Queue (DLQ)
- * topic (defaulting to topicName.DLT) using DeadLetterPublishingRecoverer.</p>
+ * with a 2-second delay. After retries are exhausted, the failure is logged and
+ * the offset is committed so the consumer moves on.</p>
  *
  * <p>Also explicitly defines the topic topology:
  * <ul>
  *   <li><b>chat-completed</b>: 3 partitions (enables load-balancing across consumer group),
  *       1 replication factor (for local/minikube environment), 7-day retention.</li>
- *   <li><b>chat-completed.DLT</b>: 1 partition, 1 replication factor, 14-day retention.</li>
  * </ul>
  * </p>
  */
@@ -52,46 +44,14 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic chatCompletedDltTopic() {
-        log.info("Creating chat-completed.DLT topic: 1 partition, 14 days retention...");
-        return TopicBuilder.name("chat-completed.DLT")
-                .partitions(1)
-                .replicas(1)
-                .configs(Map.of(
-                        "retention.ms", "1209600000" // 14 days in milliseconds
-                ))
-                .build();
-    }
-
-    @Bean
-    public CommonErrorHandler errorHandler(KafkaTemplate<Object, Object> template) {
-        log.info("Registering resilient Kafka DefaultErrorHandler with DeadLetterPublishingRecoverer...");
-
-        // Recoverer publishes failed events to the <topic>.DLT topic
-        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(template);
-
+    public CommonErrorHandler errorHandler() {
         // Fixed back-off: 3 retry attempts, 2-second interval
+        // After retries exhausted, log and commit (no DLQ routing)
         FixedBackOff backOff = new FixedBackOff(2000L, 3);
-
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, backOff);
-        
-        // Log exceptions when they occur
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(backOff);
         errorHandler.setCommitRecovered(true);
-        
-        return errorHandler;
-    }
 
-    @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, String> dlqContainerFactory(
-            KafkaProperties kafkaProperties) {
-        
-        Map<String, Object> props = kafkaProperties.buildConsumerProperties(null);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        
-        DefaultKafkaConsumerFactory<String, String> cf = new DefaultKafkaConsumerFactory<>(props);
-        
-        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(cf);
-        return factory;
+        log.info("Registered Kafka DefaultErrorHandler: 3 retries, 2s interval, log-and-skip on exhaustion");
+        return errorHandler;
     }
 }

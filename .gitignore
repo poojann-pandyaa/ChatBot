@@ -64,6 +64,7 @@ buildNumber.properties
 
 # IDEs
 .idea/
+.vscode/
 *.iml
 *.ipr
 *.iws
@@ -71,3 +72,7 @@ buildNumber.properties
 .classpath
 .project
 .factorypath
+
+# Logs
+*.log
+

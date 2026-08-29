@@ -23,12 +23,12 @@ public class JwtService {
 
     public JwtService(
             @Value("${jwt.secret}") String secret,
-            @Value("${jwt.ttl-hours:24}") long ttlHours) {
+            @Value("${jwt.access-ttl-minutes:15}") long accessTtlMinutes) {
         if (secret.length() < 32) {
             throw new IllegalStateException("JWT secret must be at least 32 characters long for HS256 security.");
         }
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
-        this.ttlMillis = ttlHours * 3600_000L;
+        this.ttlMillis = accessTtlMinutes * 60_000L;
     }
 
     /**

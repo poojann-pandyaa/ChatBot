@@ -23,6 +23,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(204).end();
     }
 
+    const limit = response.headers.get('x-token-budget-limit');
+    const remaining = response.headers.get('x-token-budget-remaining');
+    const reset = response.headers.get('x-token-budget-reset');
+    if (limit) res.setHeader('X-Token-Budget-Limit', limit);
+    if (remaining) res.setHeader('X-Token-Budget-Remaining', remaining);
+    if (reset) res.setHeader('X-Token-Budget-Reset', reset);
+
     const data = await response.json().catch(() => null);
     return res.status(response.status).json(data ?? {});
   } catch (error) {

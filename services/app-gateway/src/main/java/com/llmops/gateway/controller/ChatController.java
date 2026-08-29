@@ -11,6 +11,7 @@ import com.llmops.gateway.security.JwtAuthFilter;
 import com.llmops.gateway.service.ConversationCommandService;
 import com.llmops.gateway.service.ConversationListService;
 import com.llmops.gateway.service.ConversationQueryService;
+import com.llmops.gateway.service.TokenBudgetService;
 import com.llmops.gateway.sharding.DataSourceContextHolder;
 import com.llmops.gateway.sharding.ShardRouter;
 import io.micrometer.core.instrument.Counter;
@@ -46,6 +47,7 @@ public class ChatController {
     private final ConversationQueryService conversationQueryService;
     private final ConversationListService conversationListService;
     private final ShardRouter shardRouter;
+    private final TokenBudgetService tokenBudgetService;
     private final Counter requestCounter;
     private final PrometheusMeterRegistry prometheusRegistry;
     private final org.springframework.kafka.core.KafkaAdmin kafkaAdmin;
@@ -60,6 +62,7 @@ public class ChatController {
             ConversationQueryService conversationQueryService,
             ConversationListService conversationListService,
             ShardRouter shardRouter,
+            TokenBudgetService tokenBudgetService,
             MeterRegistry meterRegistry,
             PrometheusMeterRegistry prometheusRegistry,
             org.springframework.kafka.core.KafkaAdmin kafkaAdmin) {
@@ -70,6 +73,7 @@ public class ChatController {
         this.conversationQueryService = conversationQueryService;
         this.conversationListService = conversationListService;
         this.shardRouter = shardRouter;
+        this.tokenBudgetService = tokenBudgetService;
         this.prometheusRegistry = prometheusRegistry;
         this.kafkaAdmin = kafkaAdmin;
         this.requestCounter = Counter.builder("gateway_requests_total")
@@ -86,45 +90,51 @@ public class ChatController {
     @PostMapping("/api/chat")
     public Mono<ResponseEntity<?>> chat(@Valid @RequestBody UserChatRequest request, ServerWebExchange exchange) {
         requestCounter.increment();
-        // Override userId from JWT — never trust the body's user_id field
         final String authenticatedUserId = resolveUserId(exchange, request.userId());
 
-        // 1. Fetch history from CQRS read model (falls back to Postgres on cache miss)
-        return conversationQueryService.getConversationHistory(request.conversationId(), authenticatedUserId)
-                .flatMap(history -> {
-                    @SuppressWarnings("unchecked")
-                    List<Map<String, String>> rawMessages = (List<Map<String, String>>) history.get("messages");
-                    
-                    List<ChatMessage> historyMsgs = rawMessages.stream()
-                            .map(m -> new ChatMessage(m.get("role"), m.get("content")))
-                            .toList();
+        return tokenBudgetService.getRemainingBudget(authenticatedUserId).flatMap(remaining -> {
+            if (remaining <= 0) {
+                int resetSecs = tokenBudgetService.estimateSecondsToReset(remaining);
+                return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                        .header("X-Token-Budget-Limit", String.valueOf(tokenBudgetService.getMaxTokens()))
+                        .header("X-Token-Budget-Remaining", String.valueOf(Math.max(0, remaining)))
+                        .header("X-Token-Budget-Reset", String.valueOf(resetSecs))
+                        .body((Object) Map.of(
+                                "error", "Token budget exhausted",
+                                "message", "Your token budget has run out. It refills continuously over time.",
+                                "reset_seconds", resetSecs
+                        )));
+            }
 
-                    // Keep last 10 messages for context window
-                    int start = Math.max(0, historyMsgs.size() - 10);
-                    List<ChatMessage> history10 = historyMsgs.subList(start, historyMsgs.size());
+            return conversationQueryService.getConversationHistory(request.conversationId(), authenticatedUserId)
+                    .flatMap(history -> {
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, String>> rawMessages = (List<Map<String, String>>) history.get("messages");
+                        
+                        List<ChatMessage> historyMsgs = rawMessages.stream()
+                                .map(m -> new ChatMessage(m.get("role"), m.get("content")))
+                                .toList();
 
-                    ChatRequest clientRequest = new ChatRequest(
-                            request.prompt(),
-                            history10,
-                            request.debug(),
-                            request.stream()
-                    );
+                        int start = Math.max(0, historyMsgs.size() - 10);
+                        List<ChatMessage> history10 = historyMsgs.subList(start, historyMsgs.size());
 
-                    // Build a JWT-scoped request so the authenticated userId is used for persistence
-                    UserChatRequest scopedRequest = new UserChatRequest(
-                            request.prompt(), request.conversationId(),
-                            request.debug(), request.stream(), authenticatedUserId);
+                        ChatRequest clientRequest = new ChatRequest(
+                                request.prompt(), history10, request.debug(), request.stream());
+                        UserChatRequest scopedRequest = new UserChatRequest(
+                                request.prompt(), request.conversationId(),
+                                request.debug(), request.stream(), authenticatedUserId);
 
-                    if (request.stream()) {
-                        return handleStreamResponse(scopedRequest, clientRequest);
-                    } else {
-                        return handleNonStreamResponse(scopedRequest, clientRequest);
-                    }
-                });
+                        if (request.stream()) {
+                            return handleStreamResponse(scopedRequest, clientRequest, remaining);
+                        } else {
+                            return handleNonStreamResponse(scopedRequest, clientRequest, remaining);
+                        }
+                    });
+        });
     }
 
     private Mono<ResponseEntity<?>> handleStreamResponse(
-            UserChatRequest request, ChatRequest clientRequest) {
+            UserChatRequest request, ChatRequest clientRequest, int currentRemaining) {
 
         StringBuilder accumulatedAnswer = new StringBuilder();
         String title = buildTitle(request.prompt());
@@ -152,16 +162,22 @@ public class ChatController {
                                     request.conversationId(), title, request.userId(),
                                     request.prompt(), finalAnswer, "unknown");
                         }).subscribeOn(Schedulers.boundedElastic()).subscribe();
+                        
+                        // Deduct tokens async
+                        tokenBudgetService.deductTokens(request.userId(), request.prompt(), finalAnswer)
+                                .subscribeOn(Schedulers.boundedElastic()).subscribe();
                     }
                 });
 
         return Mono.just(ResponseEntity.ok()
                 .contentType(MediaType.valueOf("application/x-ndjson"))
+                .header("X-Token-Budget-Limit", String.valueOf(tokenBudgetService.getMaxTokens()))
+                .header("X-Token-Budget-Remaining", String.valueOf(Math.max(0, currentRemaining))) // Note: Pre-deduction value
                 .body(streamRes));
     }
 
     private Mono<ResponseEntity<?>> handleNonStreamResponse(
-            UserChatRequest request, ChatRequest clientRequest) {
+            UserChatRequest request, ChatRequest clientRequest, int currentRemaining) {
 
         String title = buildTitle(request.prompt());
 
@@ -175,7 +191,11 @@ public class ChatController {
                                     request.conversationId(), title, request.userId(),
                                     request.prompt(), answer, reasoningType);
                     }).subscribeOn(Schedulers.boundedElastic())
-                    .thenReturn(ResponseEntity.ok().body(res));
+                    .then(tokenBudgetService.deductTokens(request.userId(), request.prompt(), answer))
+                    .map(newRemaining -> ResponseEntity.ok()
+                            .header("X-Token-Budget-Limit", String.valueOf(tokenBudgetService.getMaxTokens()))
+                            .header("X-Token-Budget-Remaining", String.valueOf(Math.max(0, newRemaining)))
+                            .body((Object) res));
                 });
     }
 
@@ -228,8 +248,16 @@ public class ChatController {
     @GetMapping("/api/conversations")
     public Mono<ResponseEntity<List<Map<String, String>>>> listConversations(ServerWebExchange exchange) {
         String userId = (String) exchange.getAttributes().get(JwtAuthFilter.USER_ID_ATTR);
-        return Mono.fromCallable(() -> ResponseEntity.ok(conversationListService.listAllShards(userId)))
-                .subscribeOn(Schedulers.boundedElastic());
+        return tokenBudgetService.getRemainingBudget(userId).flatMap(remaining ->
+            Mono.fromCallable(() -> {
+                int resetSecs = tokenBudgetService.estimateSecondsToReset(remaining);
+                return ResponseEntity.ok()
+                        .header("X-Token-Budget-Limit", String.valueOf(tokenBudgetService.getMaxTokens()))
+                        .header("X-Token-Budget-Remaining", String.valueOf(Math.max(0, remaining)))
+                        .header("X-Token-Budget-Reset", String.valueOf(resetSecs))
+                        .body(conversationListService.listAllShards(userId));
+            }).subscribeOn(Schedulers.boundedElastic())
+        );
     }
 
     /**

@@ -46,21 +46,64 @@ export default function Home({
 }: HomeProps) {
   const { t } = useTranslation('chat');
 
-  // AUTH STATE ─────────────────────────────────────────────────────────────────
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  // AUTH & BUDGET STATE ────────────────────────────────────────────────────────
+  const [authToken, _setAuthToken] = useState<string | null>(null);
+  const tokenRef = useRef<string | null>(null);
+
+  const setAuthToken = (token: string | null) => {
+    tokenRef.current = token;
+    _setAuthToken(token);
+  };
+
   const [authUserId, setAuthUserId] = useState<string>('');
   const [loginUserId, setLoginUserId] = useState<string>('');
   const [loginPassword, setLoginPassword] = useState<string>('');
+  const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>('');
   const [loginLoading, setLoginLoading] = useState<boolean>(false);
 
+  const [tokenBudgetLimit, setTokenBudgetLimit] = useState<number | null>(null);
+  const [tokenBudgetRemaining, setTokenBudgetRemaining] = useState<number | null>(null);
+  const [tokenBudgetReset, setTokenBudgetReset] = useState<number | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState<boolean>(true);
+
   const isLoggedIn = !!authToken;
 
-  /** Builds auth headers for every fetch call */
-  const authHeaders = (): Record<string, string> =>
-    authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+  const fetchWithAuth = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    let currentToken = tokenRef.current;
+    const headers = { ...options.headers, ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {}) };
+    let res = await fetch(url, { ...options, headers });
+    
+    if (res.status === 401) {
+      try {
+        const refreshRes = await fetch('/api/auth/refresh', { method: 'POST' });
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          setAuthToken(data.token);
+          setAuthUserId(data.user_id);
+          currentToken = data.token;
+          const retryHeaders = { ...options.headers, 'Authorization': `Bearer ${currentToken}` };
+          res = await fetch(url, { ...options, headers: retryHeaders });
+        } else {
+          await handleLogout();
+        }
+      } catch (e) {
+        await handleLogout();
+      }
+    }
+    
+    // Extract Token Budget headers
+    const limit = res.headers.get('X-Token-Budget-Limit');
+    const remaining = res.headers.get('X-Token-Budget-Remaining');
+    const reset = res.headers.get('X-Token-Budget-Reset');
+    if (limit) setTokenBudgetLimit(parseInt(limit, 10));
+    if (remaining) setTokenBudgetRemaining(parseInt(remaining, 10));
+    if (reset) setTokenBudgetReset(parseInt(reset, 10));
 
-  const handleLogin = async () => {
+    return res;
+  };
+
+  const handleAuthSubmit = async () => {
     if (!loginUserId.trim() || !loginPassword.trim()) {
       setLoginError('Please enter both username and password.');
       return;
@@ -68,34 +111,37 @@ export default function Home({
     setLoginLoading(true);
     setLoginError('');
     try {
-      const res = await fetch('/api/auth', {
+      const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: loginUserId.trim(), password: loginPassword.trim() }),
+        body: JSON.stringify({ username: loginUserId.trim(), password: loginPassword.trim() }),
       });
       const data = await res.json();
       if (res.ok && data.token) {
         setAuthToken(data.token);
         setAuthUserId(data.user_id);
-        sessionStorage.setItem('jwt_token', data.token);
-        sessionStorage.setItem('jwt_user_id', data.user_id);
       } else {
-        setLoginError(data.error || 'Invalid credentials.');
+        setLoginError(data.error || 'Authentication failed.');
       }
     } catch {
-      setLoginError('Cannot reach the authentication service. Is the backend running?');
+      setLoginError('Cannot reach the authentication service.');
     } finally {
       setLoginLoading(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {}
     setAuthToken(null);
     setAuthUserId('');
-    sessionStorage.removeItem('jwt_token');
-    sessionStorage.removeItem('jwt_user_id');
     setConversations([]);
-    setSelectedConversation(undefined as any);
+    setSelectedConversation(undefined);
+    setTokenBudgetLimit(null);
+    setTokenBudgetRemaining(null);
+    setTokenBudgetReset(null);
   };
 
   // STATE ----------------------------------------------
@@ -161,11 +207,10 @@ export default function Home({
       let body = JSON.stringify(chatBody);
 
       const controller = new AbortController();
-      const response = await fetch(endpoint, {
+      const response = await fetchWithAuth(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeaders(),
         },
         signal: controller.signal,
         body,
@@ -174,12 +219,15 @@ export default function Home({
       if (!response.ok) {
         setLoading(false);
         setMessageIsStreaming(false);
-        if (response.status === 401) {
-          handleLogout();
-          toast.error('Session expired. Please log in again.');
-        } else if (response.status === 429) {
-          toast.error('Rate limit reached. Please wait a moment.');
-        } else {
+        if (response.status === 429) {
+          try {
+            const errData = await response.json();
+            toast.error(errData.message || 'Token budget exhausted. Please wait for refill.');
+          } catch {
+            toast.error('Token budget exhausted. Please wait for refill.');
+          }
+        } else if (response.status !== 401) {
+          // 401 is fully handled by fetchWithAuth (refresh + logout), so skip it here
           toast.error(response.statusText);
         }
         return;
@@ -374,10 +422,8 @@ export default function Home({
 
   const handleSelectConversation = async (conversation: Conversation) => {
     try {
-      const res = await fetch(`/api/history/${conversation.id}`, {
-        headers: authHeaders(),
-      });
-      if (res.status === 401) { handleLogout(); return; }
+      const res = await fetchWithAuth(`/api/history/${conversation.id}`);
+      if (res.status === 401) { await handleLogout(); return; }
       if (res.ok) {
         const data = await res.json();
         if (data && data.messages) {
@@ -510,11 +556,9 @@ export default function Home({
     }
 
     // Persist deletion to backend
-    fetch(`/api/conversation/${conversation.id}`, {
+    fetchWithAuth(`/api/conversation/${conversation.id}`, {
       method: 'DELETE',
-      headers: authHeaders(),
-    })
-      .catch(err => console.error('Failed to delete conversation on backend', err));
+    }).catch(err => console.error('Failed to delete conversation on backend', err));
   };
 
   const handleUpdateConversation = (
@@ -536,9 +580,9 @@ export default function Home({
 
     // If the user renamed the conversation, persist to backend
     if (data.key === 'name') {
-      fetch(`/api/conversation/${conversation.id}/rename`, {
+      fetchWithAuth(`/api/conversation/${conversation.id}/rename`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: data.value }),
       }).catch(err => console.error('Failed to rename conversation on backend', err));
     }
@@ -564,9 +608,8 @@ export default function Home({
     saveFolders(updatedFolders);
 
     // Persist clear-all to backend
-    fetch('/api/conversations', {
+    fetchWithAuth('/api/conversations', {
       method: 'DELETE',
-      headers: authHeaders(),
     }).catch(err => console.error('Failed to clear conversations on backend', err));
   };
 
@@ -652,13 +695,17 @@ export default function Home({
   // ON LOAD --------------------------------------------
 
   useEffect(() => {
-    // Restore JWT from sessionStorage on page reload
-    const storedToken = sessionStorage.getItem('jwt_token');
-    const storedUserId = sessionStorage.getItem('jwt_user_id');
-    if (storedToken && storedUserId) {
-      setAuthToken(storedToken);
-      setAuthUserId(storedUserId);
-    }
+    // On load: try to restore session from HttpOnly refresh token cookie via silent refresh
+    fetch('/api/auth/refresh', { method: 'POST' })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.token) {
+          setAuthToken(data.token);
+          setAuthUserId(data.user_id);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsRestoringSession(false));
 
     const theme = localStorage.getItem('theme');
     if (theme) {
@@ -688,11 +735,20 @@ export default function Home({
     if (prompts) {
       setPrompts(JSON.parse(prompts));
     }
+  }, []);
+
+  useEffect(() => {
+    if (isRestoringSession) return;
+    
+    if (!isLoggedIn) {
+      setConversations([]);
+      return;
+    }
 
     // Load conversation list from backend (Postgres is the authority)
-    fetch('/api/conversations', { headers: authHeaders() })
-      .then(res => {
-        if (res.status === 401) { handleLogout(); return Promise.reject('Unauthorized'); }
+    fetchWithAuth('/api/conversations')
+      .then(async res => {
+        if (res.status === 401) { await handleLogout(); return Promise.reject('Unauthorized'); }
         return res.json();
       })
       .then((list: Array<{id: string; name: string}>) => {
@@ -706,43 +762,47 @@ export default function Home({
         }));
         setConversations(mapped);
         localStorage.removeItem('conversationHistory'); // clean up stale data
+        
+        // Only try loading selected conversation history AFTER conversations load
+        const selectedConversation = localStorage.getItem('selectedConversation');
+        if (selectedConversation) {
+          try {
+            const parsedSelectedConversation: Conversation = JSON.parse(selectedConversation);
+            const cleanedSelectedConversation = cleanSelectedConversation(parsedSelectedConversation);
+            
+            fetchWithAuth(`/api/history/${cleanedSelectedConversation.id}`)
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                  if (data && data.messages) {
+                     cleanedSelectedConversation.messages = data.messages;
+                  }
+                  setSelectedConversation(cleanedSelectedConversation);
+              })
+              .catch(err => {
+                  console.error("Failed to fetch history on load", err);
+                  setSelectedConversation(cleanedSelectedConversation);
+              });
+          } catch (e) {
+            console.error("Failed to parse selected conversation", e);
+          }
+        } else {
+          setSelectedConversation({
+            id: uuidv4(),
+            name: 'New conversation',
+            messages: [],
+            model: OpenAIModels[defaultModelId],
+            prompt: DEFAULT_SYSTEM_PROMPT,
+            folderId: null,
+          });
+        }
       })
       .catch(err => {
         console.error('Failed to load conversation list from backend', err);
         setConversations([]);
       });
 
-    const selectedConversation = localStorage.getItem('selectedConversation');
-    if (selectedConversation) {
-      const parsedSelectedConversation: Conversation =
-        JSON.parse(selectedConversation);
-      const cleanedSelectedConversation = cleanSelectedConversation(
-        parsedSelectedConversation,
-      );
-      
-      fetch(`/api/history/${cleanedSelectedConversation.id}`)
-        .then(res => res.json())
-        .then(data => {
-            if (data && data.messages) {
-               cleanedSelectedConversation.messages = data.messages;
-            }
-            setSelectedConversation(cleanedSelectedConversation);
-        })
-        .catch(err => {
-            console.error("Failed to fetch history on load", err);
-            setSelectedConversation(cleanedSelectedConversation);
-        });
-    } else {
-      setSelectedConversation({
-        id: uuidv4(),
-        name: 'New conversation',
-        messages: [],
-        model: OpenAIModels[defaultModelId],
-        prompt: DEFAULT_SYSTEM_PROMPT,
-        folderId: null,
-      });
-    }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRestoringSession, isLoggedIn]);
 
   return (
     <>
@@ -762,6 +822,11 @@ export default function Home({
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           height: '100vh', width: '100vw', background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
         }}>
+          {isRestoringSession ? (
+            <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '16px', fontWeight: 500 }}>
+              Restoring session...
+            </div>
+          ) : (
           <div style={{
             background: 'rgba(255,255,255,0.07)', backdropFilter: 'blur(16px)',
             border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px',
@@ -770,7 +835,9 @@ export default function Home({
             <div style={{ textAlign: 'center', marginBottom: '32px' }}>
               <div style={{ fontSize: '36px', marginBottom: '8px' }}>🤖</div>
               <h1 style={{ color: '#fff', fontSize: '24px', fontWeight: 700, margin: 0 }}>LLMOps Chat</h1>
-              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginTop: '6px' }}>Sign in to continue</p>
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '14px', marginTop: '6px' }}>
+                {isRegisterMode ? 'Create a new account' : 'Sign in to continue'}
+              </p>
             </div>
             <div style={{ marginBottom: '16px' }}>
               <label style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>
@@ -781,8 +848,8 @@ export default function Home({
                 type="text"
                 value={loginUserId}
                 onChange={e => setLoginUserId(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                placeholder="alice, bob, or admin"
+                onKeyDown={e => e.key === 'Enter' && handleAuthSubmit()}
+                placeholder="Enter your username"
                 style={{
                   width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)',
                   background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: '15px', outline: 'none', boxSizing: 'border-box',
@@ -798,7 +865,7 @@ export default function Home({
                 type="password"
                 value={loginPassword}
                 onChange={e => setLoginPassword(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                onKeyDown={e => e.key === 'Enter' && handleAuthSubmit()}
                 placeholder="••••••••"
                 style={{
                   width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)',
@@ -813,21 +880,26 @@ export default function Home({
             )}
             <button
               id="login-submit-btn"
-              onClick={handleLogin}
+              onClick={handleAuthSubmit}
               disabled={loginLoading}
               style={{
                 width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
-                background: loginLoading ? 'rgba(99,102,241,0.5)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                color: '#fff', fontSize: '15px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer',
-                transition: 'opacity 0.2s',
+                background: loginLoading ? 'rgba(255,255,255,0.2)' : '#4338ca', color: '#fff',
+                fontSize: '15px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer', transition: 'background 0.2s',
               }}
             >
-              {loginLoading ? 'Signing in…' : 'Sign In'}
+              {loginLoading ? 'Please wait...' : (isRegisterMode ? 'Register' : 'Sign In')}
             </button>
-            <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', marginTop: '24px' }}>
-              Demo users: alice / alice123 · bob / bob123 · admin / admin123
-            </p>
+            <div style={{ marginTop: '16px', textAlign: 'center' }}>
+              <button 
+                onClick={() => setIsRegisterMode(!isRegisterMode)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                {isRegisterMode ? 'Already have an account? Sign In' : 'Need an account? Register'}
+              </button>
+            </div>
           </div>
+          )}
         </div>
       )}
 
@@ -843,11 +915,20 @@ export default function Home({
             />
           </div>
 
-          {/* User badge + Logout button */}
+          {/* User badge + Budget + Logout button */}
           <div style={{
             position: 'fixed', top: '8px', right: '12px', zIndex: 100,
             display: 'flex', alignItems: 'center', gap: '10px',
           }}>
+            {tokenBudgetRemaining !== null && (
+              <span style={{
+                color: tokenBudgetRemaining <= 0 ? '#ff6b6b' : 'rgba(255,255,255,0.8)', fontSize: '12px',
+                background: tokenBudgetRemaining <= 0 ? 'rgba(255,100,100,0.1)' : 'rgba(255,255,255,0.08)', padding: '4px 10px', borderRadius: '20px',
+                border: tokenBudgetRemaining <= 0 ? '1px solid #ff6b6b' : 'none',
+              }} title={tokenBudgetReset ? `Resets in ${tokenBudgetReset}s` : ''}>
+                🪙 {Math.max(0, tokenBudgetRemaining).toLocaleString()} {tokenBudgetLimit ? `/ ${tokenBudgetLimit.toLocaleString()}` : ''} tokens
+              </span>
+            )}
             <span style={{
               color: 'rgba(255,255,255,0.6)', fontSize: '12px',
               background: 'rgba(255,255,255,0.08)', padding: '4px 10px', borderRadius: '20px',

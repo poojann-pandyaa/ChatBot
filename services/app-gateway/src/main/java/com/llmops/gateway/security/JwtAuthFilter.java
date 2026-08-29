@@ -24,7 +24,7 @@ import java.util.Optional;
  * On success, injects the authenticated userId into exchange attributes.
  */
 @Component
-@Order(-10) // Run before rate limiter
+@Order(-10)
 public class JwtAuthFilter implements WebFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthFilter.class);
@@ -34,6 +34,9 @@ public class JwtAuthFilter implements WebFilter {
 
     private static final List<String> PUBLIC_PATHS = List.of(
             "/api/auth/login",
+            "/api/auth/register",
+            "/api/auth/refresh",
+            "/api/auth/logout",
             "/health",
             "/ready"
     );

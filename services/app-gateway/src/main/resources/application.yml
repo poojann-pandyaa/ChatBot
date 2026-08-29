@@ -3,8 +3,15 @@ server:
 
 # ── JWT Authentication ────────────────────────────────────────────────────────
 jwt:
-  secret: ${JWT_SECRET:ThisIsADefaultSecretKeyThatShouldBeChangedInProd1234}
-  ttl-hours: 24
+  secret: ${JWT_SECRET}
+  access-ttl-minutes: ${JWT_ACCESS_TTL:15}
+  refresh-ttl-days: ${JWT_REFRESH_TTL:7}
+
+# ── Token Budget ────────────────────────────────────────────────────────────
+token-budget:
+  max-tokens: ${TOKEN_BUDGET_MAX:50000}
+  refill-hours: ${TOKEN_BUDGET_REFILL_HOURS:5}
+  refill-interval-seconds: ${TOKEN_BUDGET_REFILL_INTERVAL:30}
 
 spring:
   application:
@@ -77,15 +84,6 @@ rag-engine:
 services:
   rag-engine:
     url: ${RAG_ENGINE_URL:http://localhost:8000}
-
-# ── Rate Limiting ─────────────────────────────────────────────────────────────
-rate-limit:
-  chat:
-    requests-per-minute: ${RATE_LIMIT_CHAT_RPM:20}
-    burst-capacity: ${RATE_LIMIT_CHAT_BURST:20}
-  auth:
-    requests-per-minute: ${RATE_LIMIT_AUTH_RPM:5}
-    burst-capacity: ${RATE_LIMIT_AUTH_BURST:5}
 
 resilience4j:
   circuitbreaker:
